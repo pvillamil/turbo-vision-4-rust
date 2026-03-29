@@ -14,10 +14,9 @@ use super::view::{View, write_line_to_terminal};
 pub struct Frame {
     bounds: Rect,
     title: String,
-    /// Palette type for color mapping (Dialog vs Editor vs other window types)
+    /// Palette type — retained for API compatibility.
+    #[allow(dead_code)]
     palette_type: FramePaletteType,
-    /// Custom palette override — if set, get_palette() returns this instead.
-    custom_palette: Option<Vec<u8>>,
     /// State flags (active, dragging, etc.) - matches Borland's TView state
     state: StateFlags,
     /// Whether the frame is resizable (matches Borland's wfGrow flag)
@@ -44,16 +43,10 @@ impl Frame {
             bounds,
             title: title.to_string(),
             palette_type,
-            custom_palette: None,
             state: SF_ACTIVE,
             resizable,
             owner: None,
         }
-    }
-
-    /// Set a custom palette that overrides the built-in palette for this frame.
-    pub fn set_custom_palette(&mut self, palette: Vec<u8>) {
-        self.custom_palette = Some(palette);
     }
 
     /// Set the frame title
@@ -269,15 +262,12 @@ impl View for Frame {
     }
 
     fn get_palette(&self) -> Option<crate::core::palette::Palette> {
-        use crate::core::palette::{palettes, Palette};
-        if let Some(ref custom) = self.custom_palette {
-            return Some(Palette::from_slice(custom));
-        }
-        match self.palette_type {
-            FramePaletteType::Dialog => Some(Palette::from_slice(palettes::CP_GRAY_DIALOG)),
-            FramePaletteType::Editor => Some(Palette::from_slice(palettes::CP_BLUE_WINDOW)),
-            FramePaletteType::HelpWindow => Some(Palette::from_slice(palettes::CP_CYAN_WINDOW)),
-        }
+        // Frame is transparent in the palette chain. Frame indices (1-3) are
+        // already in the Window's index space (1-8), so they pass straight
+        // through to the owner (Window), whose palette maps them to app
+        // palette positions. This matches Borland's cpFrame which maps
+        // Frame indices to Window indices.
+        None
     }
 }
 

@@ -129,12 +129,11 @@ impl Window {
         window
     }
 
-    /// Set a custom palette override for this window and its frame.
+    /// Set a custom palette override for this window.
     /// The palette maps logical color indices (1-8 for windows, 1-32 for dialogs)
-    /// to app palette positions. Both the Window's get_palette() and the Frame's
-    /// get_palette() will return this palette when set.
+    /// to app palette positions. The Frame and all children inherit this palette
+    /// through the owner chain — no separate Frame palette needed.
     pub fn set_custom_palette(&mut self, palette: Vec<u8>) {
-        self.frame.set_custom_palette(palette.clone());
         self.custom_palette = Some(palette);
     }
 
@@ -423,6 +422,14 @@ impl View for Window {
     }
 
     fn draw(&mut self, terminal: &mut Terminal) {
+        // Refresh owner pointers every frame. At draw time, self is at a stable
+        // heap address (inside Box<dyn View>), so the pointer is always valid.
+        // This replaces the fragile init_after_add approach that required every
+        // wrapper struct to forward the lifecycle hook.
+        let self_ptr = self as *const Self as *const dyn View;
+        self.frame.set_owner(self_ptr);
+        self.interior.set_owner(self_ptr);
+
         self.frame.draw(terminal);
         self.interior.draw(terminal);
 
