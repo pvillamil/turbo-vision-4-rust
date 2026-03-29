@@ -14,8 +14,10 @@ use super::view::{View, write_line_to_terminal};
 pub struct Frame {
     bounds: Rect,
     title: String,
-    /// Palette type for color mapping (Dialog vs Editor vs other window types)
-    /// Matches Borland's view hierarchy palette mapping
+    /// Palette type — retained for API compatibility. Color resolution now
+    /// traverses the owner chain (Frame → Window → App) rather than using
+    /// this field directly.
+    #[allow(dead_code)]
     palette_type: FramePaletteType,
     /// State flags (active, dragging, etc.) - matches Borland's TView state
     state: StateFlags,
@@ -263,12 +265,12 @@ impl View for Frame {
     }
 
     fn get_palette(&self) -> Option<crate::core::palette::Palette> {
-        use crate::core::palette::{palettes, Palette};
-        match self.palette_type {
-            FramePaletteType::Dialog => Some(Palette::from_slice(palettes::CP_GRAY_DIALOG)),
-            FramePaletteType::Editor => Some(Palette::from_slice(palettes::CP_BLUE_WINDOW)),
-            FramePaletteType::HelpWindow => Some(Palette::from_slice(palettes::CP_CYAN_WINDOW)),
-        }
+        // The Frame is transparent in the palette chain. Its map_color calls
+        // traverse to the owner (Window), whose palette provides the mapping.
+        // This matches Borland's behavior where cpFrame maps indices to the
+        // parent Window's index space, and we achieve the same by returning
+        // None here since Frame uses the same index space as its parent.
+        None
     }
 }
 

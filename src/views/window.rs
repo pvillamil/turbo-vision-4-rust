@@ -120,8 +120,9 @@ impl Window {
             explicit_drag_limits: None,
         };
 
-        // Set the interior's owner to the window for palette chain resolution
+        // Set owner pointers for palette chain resolution
         window.interior.set_owner(&window as *const _ as *const dyn View);
+        window.frame.set_owner(&window as *const _ as *const dyn View);
 
         window
     }

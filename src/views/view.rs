@@ -395,10 +395,9 @@ pub trait View {
     /// # Returns
     /// The final color attribute
     fn map_color(&self, color_index: u8) -> crate::core::palette::Attr {
-        use crate::core::palette::{palettes, Attr, Palette};
+        use crate::core::palette::{palettes, Attr};
 
         // Borland's errorAttr = 0xCF (Light Red/Magenta background, White foreground)
-        // This bright color makes palette errors immediately visible
         const ERROR_ATTR: u8 = 0xCF;
 
         if color_index == 0 {
@@ -407,10 +406,9 @@ pub trait View {
 
         let mut color = color_index;
 
-        // First, remap through this view's palette
+        // Step 1: Remap through this view's own palette
         if let Some(palette) = self.get_palette() {
             if !palette.is_empty() {
-                // Borland behavior: Check bounds BEFORE remapping
                 if color as usize > palette.len() {
                     return Attr::from_u8(ERROR_ATTR);
                 }
@@ -421,80 +419,40 @@ pub trait View {
             }
         }
 
-        // NOTE: We skip the owner chain traversal to avoid unsafe pointer dereference.
-        // Instead, we apply a standard palette chain: View -> Window/Dialog -> Application
-        //
-        // Borland Turbo Vision palette layout (from program.h):
-        //    1      = TBackground
-        //    2-7    = TMenuView and TStatusLine (direct to app)
-        //    8-15   = TWindow(Blue)
-        //    16-23  = TWindow(Cyan)
-        //    24-31  = TWindow(Gray)
-        //    32-63  = TDialog (remapped through dialog palette)
-        //
-        // Apply palette remapping based on ranges
-        // This is a simplified version of Borland's owner chain traversal
-
-        // For controls in Window or Dialog (indices 1-31), remap through parent palette
-        // This includes scrollbars (4-5), static text (6), labels (7-9), buttons (10-14), etc.
-        // Note: Indices 32+ are already app palette indices and shouldn't be remapped
-        // Views with OwnerType::None (MenuBar, StatusLine, Desktop) use direct app palette
-        let owner_type = self.get_owner_type();
-        if color >= 1 && color < 32 {
-            match owner_type {
-                OwnerType::Window => {
-                    // Remap through blue window palette (standard TWindow)
-                    let window_palette = Palette::from_slice(palettes::CP_BLUE_WINDOW);
-                    // Borland behavior: Return errorAttr if index exceeds palette size
-                    if color as usize > window_palette.len() {
-                        return Attr::from_u8(ERROR_ATTR);
-                    }
-                    let remapped = window_palette.get(color as usize);
+        // Step 2: Walk up the owner chain, remapping through each owner's palette.
+        // Matches Borland: TView::mapColor() traverses owner->getPalette() up to TApplication.
+        // Each level's palette maps indices to the next level's indices.
+        // Views without a palette (get_palette returns None) are transparent.
+        // The chain stops when there's no owner (we've reached the root).
+        let mut current_owner = self.get_owner();
+        // Safety: owner pointers are valid for the lifetime of the view hierarchy.
+        // They are set by Group::add/Window constructor and point to parent views
+        // that outlive their children.
+        while let Some(owner_ptr) = current_owner {
+            let owner = unsafe { &*owner_ptr };
+            if let Some(palette) = owner.get_palette() {
+                if !palette.is_empty() && (color as usize) <= palette.len() {
+                    let remapped = palette.get(color as usize);
                     if remapped == 0 {
                         return Attr::from_u8(ERROR_ATTR);
                     }
                     color = remapped;
-                }
-                OwnerType::CyanWindow => {
-                    // Remap through cyan window palette (help windows)
-                    let window_palette = Palette::from_slice(palettes::CP_CYAN_WINDOW);
-                    if color as usize > window_palette.len() {
-                        return Attr::from_u8(ERROR_ATTR);
-                    }
-                    let remapped = window_palette.get(color as usize);
-                    if remapped == 0 {
-                        return Attr::from_u8(ERROR_ATTR);
-                    }
-                    color = remapped;
-                }
-                OwnerType::Dialog => {
-                    // Remap through dialog palette
-                    let dialog_palette = Palette::from_slice(palettes::CP_GRAY_DIALOG);
-                    // Borland behavior: Return errorAttr if index exceeds palette size
-                    if color as usize > dialog_palette.len() {
-                        return Attr::from_u8(ERROR_ATTR);
-                    }
-                    let remapped = dialog_palette.get(color as usize);
-                    if remapped == 0 {
-                        return Attr::from_u8(ERROR_ATTR);
-                    }
-                    color = remapped;
-                }
-                OwnerType::None => {
-                    // No remapping - use direct app palette
                 }
             }
+            current_owner = owner.get_owner();
         }
 
-        // Reached root (Application) - color is now an index into app palette
-        // Use the application color palette to get the final attribute
+        // Step 3: Resolve through application palette
         let app_palette_data = palettes::get_app_palette();
-        let app_palette = Palette::from_slice(&app_palette_data);
-        let final_color = app_palette.get(color as usize);
-        if final_color == 0 {
-            return Attr::from_u8(ERROR_ATTR);
+        if (color as usize) < app_palette_data.len() {
+            let final_color = app_palette_data[color as usize];
+            if final_color == 0 {
+                return Attr::from_u8(ERROR_ATTR);
+            }
+            Attr::from_u8(final_color)
+        } else {
+            Attr::from_u8(ERROR_ATTR)
         }
-        Attr::from_u8(final_color)
     }
 }
 
