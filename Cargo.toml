@@ -12,9 +12,13 @@ categories = ["command-line-interface", "gui"]
 readme = "README.md"
 exclude = [
     "local-only/*",
+    "legacy/*",
     "docs/*",
     "debug/*",
+    "data/*",
+    "to-do/*",
     ".claude/*",
+    ".tokensave/*",
     "*.png",
     "*.jpg",
     "*.jpeg",
