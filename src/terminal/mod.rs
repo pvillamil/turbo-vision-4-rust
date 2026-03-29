@@ -333,10 +333,14 @@ impl Terminal {
     /// This clears the internal prev_buffer, forcing all cells to be resent
     /// to the terminal on the next [`flush()`](Self::flush) call.
     pub fn force_full_redraw(&mut self) {
-        let empty_cell = Cell::new(' ', Attr::from_u8(0x07));
+        // Use a cell that will never match any real content, forcing every
+        // cell to be resent on the next flush. Must NOT use 0x07 (the default
+        // empty cell) because views that fill with LightGray-on-Black spaces
+        // would match and be silently skipped by the diff.
+        let force_cell = Cell::new('\0', Attr::from_u8(0xFF));
         for row in &mut self.prev_buffer {
             for cell in row {
-                *cell = empty_cell;
+                *cell = force_cell;
             }
         }
     }
