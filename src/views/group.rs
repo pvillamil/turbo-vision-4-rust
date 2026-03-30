@@ -462,6 +462,14 @@ impl View for Group {
         clip_bounds.grow(1, 1);
         terminal.push_clip(clip_bounds);
 
+        // Refresh children's owner pointers to this Group every frame.
+        // Pointers set during Group::add may be stale if the Group moved
+        // (e.g. Window returned from constructor, wrapped in a struct, boxed).
+        let self_ptr = self as *const Self as *const dyn View;
+        for child in &mut self.children {
+            child.set_owner(self_ptr);
+        }
+
         // Only draw children that intersect with this group's bounds
         // The clipping region ensures children can't render outside parent boundaries
         for child in &mut self.children {

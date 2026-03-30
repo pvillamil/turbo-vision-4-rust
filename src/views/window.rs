@@ -434,7 +434,9 @@ impl View for Window {
         self.interior.draw(terminal);
 
         // Draw frame children (scrollbars, etc.) after interior so they appear on top
+        // Refresh their owner pointers too (they were set by add_frame_child which may be stale)
         for child in &mut self.frame_children {
+            child.set_owner(self_ptr);
             child.draw(terminal);
         }
 
