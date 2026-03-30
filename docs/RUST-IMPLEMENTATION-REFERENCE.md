@@ -892,7 +892,7 @@ fn show_message(app: &mut Application, title: &str) {
 
 | Aspect | Borland | Rust |
 |--------|---------|------|
-| **Parent Pointer** | Direct `owner` pointer | Event modification + call stack |
+| **Parent Pointer** | Direct `owner` pointer | QCell palette chain + event transformation |
 | **Event Handling** | `handleEvent(event)` method | `handle_event(&mut event)` method |
 | **Init Methods** | `initMenuBar()`, `initStatusLine()` | Set via `app.set_menu_bar()`, `app.set_status_line()` |
 | **Dialog Result** | Return value from `execute()` | Dialog returns `CommandId` |

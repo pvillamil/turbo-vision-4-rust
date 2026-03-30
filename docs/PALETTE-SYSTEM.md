@@ -48,33 +48,39 @@ Each view stores a raw `owner` pointer to its parent, forming a linked list that
 
 ## Rust Implementation
 
-### The Safety Problem
+### QCell-Based Safe Palette Chain (v1.1.0+)
 
-Borland's approach uses raw C++ pointers: `TView* owner`. In Rust, storing raw pointers and dereferencing them is **unsafe** because:
+The Rust implementation faithfully reproduces Borland's owner-chain walk using
+`qcell::QCell` for safe shared access, with zero `unsafe` code. Each view
+stores an `Option<PaletteChainNode>` -- a reference-counted, QCell-protected
+node that holds a palette and a link to its parent's node.
 
-- Pointers can become invalid if the parent moves in memory
-- No lifetime guarantees from the borrow checker
-- Undefined behavior when dereferencing stale pointers
-- Risk of crashes, especially when views are moved (e.g., Dialog moved to Desktop)
+A single `QCellOwner` lives in a `static OnceLock` (accessed via
+`palette_token()`), so `draw()` and `map_color()` keep their original
+signatures with no token parameter threading.
 
-### Our Safe Solution: Context-Aware Remapping
+For the full design rationale, thread-safety analysis, and architecture
+diagram, see [PALETTE-SYSTEM-DESIGN.md](PALETTE-SYSTEM-DESIGN.md).
 
-Instead of storing owner pointers and traversing them at runtime, we use a **context-aware palette system** with an `owner_type` field:
+### Chain Setup During Draw
+
+During `draw()`, each parent builds its palette chain node and sets it on
+children before drawing them:
 
 ```rust
-pub enum OwnerType {
-    None,   // Top-level view (Application/Desktop)
-    Window, // Inside a Window
-    Dialog, // Inside a Dialog
+// Group::draw() -- Group is typically transparent (no palette)
+let my_node = PaletteChainNode::new(
+    self.get_palette(),          // None for Group
+    self.palette_chain.clone(),  // link to parent's node (e.g. Window)
+);
+for child in &mut self.children {
+    child.set_palette_chain(Some(my_node.clone()));
+    child.draw(terminal);
 }
 ```
 
-Each view stores its `owner_type` which determines how colors are remapped:
-- **OwnerType::None**: Direct app palette (MenuBar, StatusLine, Desktop)
-- **OwnerType::Dialog**: View → Dialog → App (Button, Label, InputLine)
-- **OwnerType::Window**: View → Window → App (ScrollBar in Window context)
-
-This eliminates the need for owner pointers while providing context-aware color mapping.
+Window::draw() does the same but provides a real palette (CP_BLUE_WINDOW,
+CP_GRAY_DIALOG, etc.) as the chain root.
 
 ### Implementation in `View::map_color()`
 
@@ -84,52 +90,37 @@ fn map_color(&self, color_index: u8) -> Attr {
 
     // Step 1: Remap through this view's own palette
     if let Some(palette) = self.get_palette() {
-        if !palette.is_empty() {
-            color = palette.get(color as usize);
-            if color == 0 {
-                return Attr::from_u8(ERROR_ATTR);
-            }
-        }
+        color = palette.get(color as usize);
     }
 
-    // Step 2: Context-aware remapping based on owner type
-    // Only remap indices 1-31 when explicitly in a Dialog context
-    let owner_type = self.get_owner_type();
-    if color >= 1 && color < 32 && owner_type == OwnerType::Dialog {
-        let dialog_palette = Palette::from_slice(palettes::CP_GRAY_DIALOG);
-        let remapped = dialog_palette.get(color as usize);
-        if remapped > 0 {
-            color = remapped;
-        }
+    // Step 2: Walk up the QCell chain (safe, no unsafe)
+    if let Some(chain_node) = self.get_palette_chain() {
+        color = chain_node.remap_color(color);
     }
 
-    // Step 3: Apply Application palette to get final attribute
-    let app_palette = Palette::from_slice(palettes::CP_APP_COLOR);
-    let final_color = app_palette.get(color as usize);
-    if final_color == 0 {
-        return Attr::from_u8(ERROR_ATTR);
-    }
-    Attr::from_u8(final_color)
+    // Step 3: Resolve through application palette
+    let app_palette = palettes::get_app_palette();
+    Attr::from_u8(app_palette[(color - 1) as usize])
 }
 ```
 
-### Owner Type Field Instead of Pointers
+### Per-View Storage
 
-The Rust implementation uses a simple enum field instead of pointers:
+Each view stores a single optional chain node:
 
 ```rust
 struct Button {
     // ... other fields
-    owner_type: OwnerType,  // Default: OwnerType::Dialog
+    palette_chain: Option<PaletteChainNode>,  // set by parent during draw
 }
 ```
 
 Benefits:
-- ✅ **No raw pointers**: Uses simple enum value instead of `owner: *const dyn View`
-- ✅ **No unsafe code**: No `unsafe { &*owner_ptr }` dereferencing
-- ✅ **Safe by design**: Context determined by simple field, not pointer traversal
-- ✅ **Same visual results**: Produces identical colors to Borland implementation
-- ✅ **Context-aware**: Different views can use different palette chains
+- No raw pointers or `unsafe` code anywhere in the view system
+- Faithful reproduction of Borland's chain-walk semantics
+- Original `draw()` and `map_color()` signatures preserved (no parameter changes)
+- Thread-safe: static `QCellOwner` is `Sync`, nodes use `Rc` (`!Send`)
+- Negligible runtime cost: one `Rc` clone per child per frame
 
 ## Palette Definitions
 
@@ -182,7 +173,7 @@ pub const CP_BUTTON: &[u8] = &[
 ];
 ```
 
-Button color indices (when owner_type = Dialog):
+Button color indices (when inside a Dialog):
 - 1: Normal → Dialog[10]=41 → App[41]=0x20 (Black on Green)
 - 2: Default → Dialog[11]=42 → App[42]=0x2B (LightGreen on Green)
 - 3: Focused → Dialog[12]=43 → App[43]=0x2F (White on Green)
@@ -197,7 +188,7 @@ pub const CP_LABEL: &[u8] = &[
 ];
 ```
 
-Label colors (when owner_type = Dialog):
+Label colors (when inside a Dialog):
 - 1: Normal fg → Dialog[7]=38 → App[38]=0x70 (Black on LightGray)
 - 2: Normal bg → Dialog[8]=39 → App[39]=0x7F (White on LightGray)
 - 3-4: Light → Dialog[9]=40 → App[40]=0x7E (Yellow on LightGray)
@@ -210,10 +201,10 @@ pub const CP_STATIC_TEXT: &[u8] = &[
 ];
 ```
 
-StaticText color (when owner_type = Dialog):
+StaticText color (when inside a Dialog):
 - 1: Normal → Dialog[6]=37 → App[37]=0x70 (Black on LightGray)
 
-**MenuBar Palette (CP_MENU_BAR)** - Top-level view (owner_type = None):
+**MenuBar Palette (CP_MENU_BAR)** - Top-level view (top-level, no parent palette):
 ```rust
 pub const CP_MENU_BAR: &[u8] = &[
     2, 5, 3, 4,  // Direct app palette indices (no dialog remapping)
@@ -238,7 +229,7 @@ Button's "focused text" maps to dialog color 12.
 
 ### Step 2: Check Owner Type
 ```
-button.owner_type == OwnerType::Dialog → YES, remap through dialog palette
+button has palette_chain → walk chain through Dialog palette → remap
 ```
 
 ### Step 3: Gray Dialog Palette
@@ -270,7 +261,7 @@ MenuBar's "selected" maps to app color 5.
 
 ### Step 2: Check Owner Type
 ```
-menubar.owner_type == OwnerType::None → NO dialog remapping
+menubar has no palette_chain → skip chain walk, go direct to app palette
 ```
 
 ### Step 3: Application Palette (Direct)
@@ -288,13 +279,13 @@ MenuBar.map_color(2) → 0x20 (Black on Green)
 
 | Aspect | Borland C++ | Rust Implementation |
 |--------|-------------|---------------------|
-| **Owner Storage** | Raw `TView* owner` pointer | `owner_type: OwnerType` enum field |
-| **Chain Traversal** | Runtime walk via `owner->owner` | Context check via enum value |
-| **Safety** | Unsafe raw pointers | 100% safe Rust |
-| **Flexibility** | Dynamic, can have any hierarchy | Three contexts: None, Window, Dialog |
+| **Owner Storage** | Raw `TView* owner` pointer | `PaletteChainNode` (Rc\<QCell\>) |
+| **Chain Traversal** | Runtime walk via `owner->owner` | QCell chain walk via `remap_color()` |
+| **Safety** | Unsafe raw pointers | 100% safe Rust (zero `unsafe` in views) |
+| **Flexibility** | Dynamic, any hierarchy depth | Dynamic, any hierarchy depth (faithful reproduction) |
 | **Performance** | Pointer dereferences + virtual calls | Direct palette lookups + enum check |
 | **Visual Output** | Depends on actual hierarchy | Same colors via context-aware remapping |
-| **Context Awareness** | Implicit (via owner chain) | Explicit (via owner_type field) |
+| **Context Awareness** | Implicit (via owner chain) | Implicit (via QCell palette chain) |
 
 ## Advantages of the Rust Approach
 
@@ -315,16 +306,12 @@ MenuBar.map_color(2) → 0x20 (Black on Green)
 
 ## Limitations
 
-### Fixed Context Types
+### Dynamic Palette Chain
 
-The current implementation supports three context types via `OwnerType`:
-- **None**: Top-level views (Desktop, MenuBar, StatusLine)
-- **Window**: Window-contained views (ScrollBar)
-- **Dialog**: Dialog-contained controls (Button, Label, InputLine)
-
-This works for 99% of typical Turbo Vision UIs but doesn't support:
-- Custom intermediate palette levels beyond these three
-- Deeply nested palette hierarchies (e.g., Dialog→SubDialog→Control)
+The QCell-based palette chain supports arbitrary nesting depth, faithfully
+reproducing Borland's dynamic owner chain traversal. Any view hierarchy
+(Window, Dialog, nested Groups, custom containers) works automatically
+because the chain is built from each view's actual `get_palette()` at draw time.
 - Runtime-switchable palette chains
 
 ### When This Matters
@@ -510,7 +497,7 @@ fn draw(&mut self, terminal: &mut Terminal, color_resolver: &dyn Fn(u8) -> Attr)
 
 ## Conclusion
 
-The current palette system eliminates unsafe code while maintaining visual compatibility with Borland Turbo Vision. By using an `owner_type` field instead of runtime owner chain traversal, we achieve:
+The current palette system eliminates unsafe code while maintaining visual compatibility with Borland Turbo Vision. By using QCell-based palette chain nodes instead of raw owner pointers, we achieve:
 
 - **100% memory safety** (simple enum field, no raw pointers, no unsafe code)
 - **Identical visual output** for standard UI layouts (verified by regression tests)

@@ -227,8 +227,8 @@ Parent Pointers:
   Borland: void TButton::press() { message(owner, evBroadcast, cmd, this); }
   Rust:    fn handle_event(&mut self, event: &mut Event) { *event = Event::command(cmd); }
   
-  Rust uses event transformation instead of owner pointers - achieves same result
-  via call stack and borrowing instead of raw pointers.
+  Rust uses event transformation for child-to-parent communication and QCell-based
+  palette chain nodes for color resolution - no unsafe code in the view system.
 
 Init Methods:
   Borland: void TApp::initMenuBar() {...}

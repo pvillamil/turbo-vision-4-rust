@@ -2132,9 +2132,9 @@ fn handle_event(&mut self, event: &mut Event) {
 
 ## Overview
 
-**Status:** ✅ **Equivalent Architecture** (v0.2.3)
+**Status:** ✅ **Equivalent Architecture** (v1.1.0 -- QCell-based palette chain, event-based communication)
 
-In Borland, child views communicate with parents via raw owner pointers. In Rust, we achieve the same functionality through **event transformation** using the call stack, eliminating unsafe pointers while maintaining full compatibility.
+In Borland, child views communicate with parents via raw owner pointers. In Rust, child-to-parent communication uses **event transformation** (the call stack). Palette chain traversal uses **QCell-based safe nodes** (see [PALETTE-SYSTEM-DESIGN.md](PALETTE-SYSTEM-DESIGN.md)). No `unsafe` code remains in the view system.
 
 ## The Problem
 
@@ -3189,6 +3189,12 @@ When fully implemented, the command set system:
 ---
 
 # Palette System
+
+> **Note (v1.1.0):** The Rust implementation now uses a QCell-based safe palette
+> chain instead of raw owner pointers or the OwnerType enum. The Borland
+> description below remains accurate; for the Rust design see
+> [PALETTE-SYSTEM-DESIGN.md](PALETTE-SYSTEM-DESIGN.md) and
+> [PALETTE-SYSTEM.md](PALETTE-SYSTEM.md).
 
 ## Overview
 
