@@ -168,6 +168,35 @@ impl HelpViewer {
         self.make_select_visible();
     }
 
+    /// Find the next or previous visible cross-reference relative to the current selection.
+    /// Returns 1-based index of the next/prev visible cross-ref, or None if none found.
+    fn find_visible_cross_ref(&self, forward: bool) -> Option<usize> {
+        if self.cross_refs.is_empty() {
+            return None;
+        }
+
+        let visible_start = self.delta.y + 1; // 1-based line number
+        let visible_end = visible_start + self.bounds.height();
+
+        // Collect visible cross-refs (1-based indices)
+        let visible: Vec<usize> = self.cross_refs.iter().enumerate()
+            .filter(|(_, cr)| cr.line >= visible_start && cr.line < visible_end)
+            .map(|(i, _)| i + 1) // Convert to 1-based
+            .collect();
+
+        if visible.is_empty() {
+            return None;
+        }
+
+        if forward {
+            // Find the first visible cross-ref after current selection
+            visible.iter().find(|&&idx| idx > self.selected).copied()
+        } else {
+            // Find the last visible cross-ref before current selection
+            visible.iter().rev().find(|&&idx| idx < self.selected).copied()
+        }
+    }
+
     /// Find cross-reference at the given screen position
     /// Returns 1-based index (like Borland) or 0 if none found
     /// Matches Borland: THelpViewer::getNumRows() pattern for hit testing
@@ -198,9 +227,34 @@ impl HelpViewer {
         0 // No cross-ref at this position
     }
 
+    /// Check if a cross-reference exists at screen position (public API for HelpWindow).
+    /// Returns 1-based index or 0 if none found.
+    pub fn get_cross_ref_at_public(&self, screen_x: i16, screen_y: i16) -> usize {
+        self.get_cross_ref_at(screen_x, screen_y)
+    }
+
     /// Get the current topic ID
     pub fn current_topic(&self) -> Option<&str> {
         self.current_topic.as_deref()
+    }
+
+    /// Get the current scroll state (scroll position and selected cross-ref).
+    pub fn get_scroll_state(&self) -> (Point, usize) {
+        (self.delta, self.selected)
+    }
+
+    /// Restore a previously saved scroll state.
+    pub fn set_scroll_state(&mut self, delta: Point, selected: usize) {
+        self.delta = Point::new(
+            delta.x.max(0).min(self.limit.x),
+            delta.y.max(0).min(self.limit.y),
+        );
+        self.selected = if selected > 0 && selected <= self.cross_refs.len() {
+            selected
+        } else {
+            1
+        };
+        self.update_scrollbar();
     }
 
     /// Clear the viewer
@@ -372,11 +426,31 @@ impl View for HelpViewer {
             EventType::Keyboard => {
                 match event.key_code {
                     KB_UP => {
-                        self.scroll_by(0, -1);
+                        if !self.cross_refs.is_empty() {
+                            if let Some(prev) = self.find_visible_cross_ref(false) {
+                                self.selected = prev;
+                                self.make_select_visible();
+                            } else {
+                                // At first visible link or no visible links — scroll up
+                                self.scroll_by(0, -1);
+                            }
+                        } else {
+                            self.scroll_by(0, -1);
+                        }
                         event.clear();
                     }
                     KB_DOWN => {
-                        self.scroll_by(0, 1);
+                        if !self.cross_refs.is_empty() {
+                            if let Some(next) = self.find_visible_cross_ref(true) {
+                                self.selected = next;
+                                self.make_select_visible();
+                            } else {
+                                // At last visible link or no visible links — scroll down
+                                self.scroll_by(0, 1);
+                            }
+                        } else {
+                            self.scroll_by(0, 1);
+                        }
                         event.clear();
                     }
                     KB_LEFT => {
@@ -443,15 +517,8 @@ impl View for HelpViewer {
                     if hit_ref > 0 {
                         // Select the clicked link
                         self.selected = hit_ref;
-
-                        if event.mouse.double_click {
-                            // Double-click follows the link
-                            // Don't clear event - let HelpWindow handle navigation
-                            // Convert to ENTER-like behavior
-                        } else {
-                            // Single click just selects
-                            event.clear();
-                        }
+                        // Don't clear event — let HelpWindow follow the link
+                        // (both single-click and double-click)
                     } else {
                         event.clear();
                     }
