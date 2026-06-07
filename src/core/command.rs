@@ -6,16 +6,17 @@
 pub type CommandId = u16;
 
 // Modal dialog control
-pub const CM_CONTINUE: CommandId = 0;  // Modal dialog continues (returned by get_end_state when no end command received)
+pub const CM_CONTINUE: CommandId = 0; // Modal dialog continues (returned by get_end_state when no end command received)
 
 // Standard commands
 pub const CM_QUIT: CommandId = 24;
 pub const CM_CLOSE: CommandId = 25;
 pub const CM_ZOOM: CommandId = 26;
-pub const CM_NEXT: CommandId = 27;  // Cycle to next window (Borland: cmNext)
-pub const CM_PREV: CommandId = 28;  // Cycle to previous window (Borland: cmPrev)
-pub const CM_TILE: CommandId = 29;  // Tile windows (Borland: cmTile)
-pub const CM_CASCADE: CommandId = 30;  // Cascade windows (Borland: cmCascade)
+pub const CM_NEXT: CommandId = 27; // Cycle to next window (Borland: cmNext)
+pub const CM_PREV: CommandId = 28; // Cycle to previous window (Borland: cmPrev)
+pub const CM_TILE: CommandId = 29; // Tile windows (Borland: cmTile)
+pub const CM_CASCADE: CommandId = 30; // Cascade windows (Borland: cmCascade)
+pub const CM_SCREENSHOT: CommandId = 31; // Save a PNG screenshot (also bound to Ctrl+F12)
 pub const CM_OK: CommandId = 10;
 pub const CM_CANCEL: CommandId = 11;
 pub const CM_YES: CommandId = 12;
@@ -23,14 +24,14 @@ pub const CM_NO: CommandId = 13;
 pub const CM_DEFAULT: CommandId = 14;
 
 // Broadcast commands
-pub const CM_REDRAW: CommandId = 53;               // Full screen redraw needed (terminal resize, palette change, etc.)
-pub const CM_COMMAND_SET_CHANGED: CommandId = 52;  // Borland: cmCommandSetChanged
-pub const CM_RECEIVED_FOCUS: CommandId = 50;       // Borland: cmReceivedFocus
-pub const CM_RELEASED_FOCUS: CommandId = 51;       // Borland: cmReleasedFocus
-pub const CM_GRAB_DEFAULT: CommandId = 62;         // Borland: cmGrabDefault
-pub const CM_RELEASE_DEFAULT: CommandId = 63;      // Borland: cmReleaseDefault
-pub const CM_FILE_FOCUSED: CommandId = 64;         // Borland: cmFileFocused - file dialog selection changed
-pub const CM_FILE_DOUBLE_CLICKED: CommandId = 65;  // Borland: cmFileDoubleClicked - file double-clicked in list
+pub const CM_REDRAW: CommandId = 53; // Full screen redraw needed (terminal resize, palette change, etc.)
+pub const CM_COMMAND_SET_CHANGED: CommandId = 52; // Borland: cmCommandSetChanged
+pub const CM_RECEIVED_FOCUS: CommandId = 50; // Borland: cmReceivedFocus
+pub const CM_RELEASED_FOCUS: CommandId = 51; // Borland: cmReleasedFocus
+pub const CM_GRAB_DEFAULT: CommandId = 62; // Borland: cmGrabDefault
+pub const CM_RELEASE_DEFAULT: CommandId = 63; // Borland: cmReleaseDefault
+pub const CM_FILE_FOCUSED: CommandId = 64; // Borland: cmFileFocused - file dialog selection changed
+pub const CM_FILE_DOUBLE_CLICKED: CommandId = 65; // Borland: cmFileDoubleClicked - file double-clicked in list
 
 // Custom commands (user defined)
 pub const CM_ABOUT: CommandId = 100;
@@ -55,7 +56,7 @@ pub const CM_PASTE: CommandId = 114;
 pub const CM_SELECT_ALL: CommandId = 115;
 pub const CM_FIND: CommandId = 116;
 pub const CM_REPLACE: CommandId = 117;
-pub const CM_SEARCH_AGAIN: CommandId = 118;  // Borland: cmSearchAgain (F3) - find next
+pub const CM_SEARCH_AGAIN: CommandId = 118; // Borland: cmSearchAgain (F3) - find next
 
 // Search menu commands
 pub const CM_FIND_IN_FILES: CommandId = 120;
@@ -72,7 +73,7 @@ pub const CM_HELP_INDEX: CommandId = 140;
 pub const CM_KEYBOARD_REF: CommandId = 141;
 
 // Internal commands
-pub const CM_FOCUS_LINK: CommandId = 66;  // Label hotkey: focus the linked control (ViewId stored in key_code)
+pub const CM_FOCUS_LINK: CommandId = 66; // Label hotkey: focus the linked control (ViewId stored in key_code)
 
 // Demo commands
 pub const CM_LISTBOX_DEMO: CommandId = 150;

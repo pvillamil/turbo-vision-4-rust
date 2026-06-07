@@ -10,16 +10,15 @@ use std::io::{self, Write, stdout};
 use std::time::{Duration, Instant};
 
 use crossterm::{
-    cursor, execute,
+    cursor,
+    event::{self, Event as CTEvent, KeyEventKind, MouseButton, MouseEventKind},
+    execute,
     terminal::{self, window_size},
-    event::{self, Event as CTEvent, KeyEventKind, MouseEventKind, MouseButton},
 };
 
 use super::backend::{Backend, Capabilities};
 use crate::core::event::{
-    Event, EventType, EscSequenceTracker,
-    MB_LEFT_BUTTON, MB_MIDDLE_BUTTON, MB_RIGHT_BUTTON,
-    KB_F12, KB_SHIFT_F12,
+    EscSequenceTracker, Event, EventType, MB_LEFT_BUTTON, MB_MIDDLE_BUTTON, MB_RIGHT_BUTTON,
 };
 use crate::core::geometry::Point;
 
@@ -51,10 +50,6 @@ pub struct CrosstermBackend {
     last_click_time: Option<Instant>,
     last_click_pos: Point,
     capabilities: Capabilities,
-    /// Callback for F12 screen dump (set by Terminal)
-    pub(crate) on_screen_dump: Option<Box<dyn Fn() + Send>>,
-    /// Callback for Shift+F12 active view dump (set by Terminal)
-    pub(crate) on_view_dump: Option<Box<dyn Fn() + Send>>,
 }
 
 impl CrosstermBackend {
@@ -81,8 +76,6 @@ impl CrosstermBackend {
                 focus_events: false,
                 kitty_keyboard: false,
             },
-            on_screen_dump: None,
-            on_view_dump: None,
         })
     }
 
@@ -110,14 +103,18 @@ impl CrosstermBackend {
         }
 
         // Convert button state to our format
-        let buttons = match mouse.kind {
-            MouseEventKind::Down(MouseButton::Left) | MouseEventKind::Drag(MouseButton::Left) => MB_LEFT_BUTTON,
-            MouseEventKind::Down(MouseButton::Right) | MouseEventKind::Drag(MouseButton::Right) => MB_RIGHT_BUTTON,
-            MouseEventKind::Down(MouseButton::Middle) | MouseEventKind::Drag(MouseButton::Middle) => MB_MIDDLE_BUTTON,
-            MouseEventKind::Up(_) => 0,
-            MouseEventKind::Moved => self.last_mouse_buttons,
-            _ => return None,
-        };
+        let buttons =
+            match mouse.kind {
+                MouseEventKind::Down(MouseButton::Left)
+                | MouseEventKind::Drag(MouseButton::Left) => MB_LEFT_BUTTON,
+                MouseEventKind::Down(MouseButton::Right)
+                | MouseEventKind::Drag(MouseButton::Right) => MB_RIGHT_BUTTON,
+                MouseEventKind::Down(MouseButton::Middle)
+                | MouseEventKind::Drag(MouseButton::Middle) => MB_MIDDLE_BUTTON,
+                MouseEventKind::Up(_) => 0,
+                MouseEventKind::Moved => self.last_mouse_buttons,
+                _ => return None,
+            };
 
         // Determine event type and detect double-clicks
         let (event_type, is_double_click) = match mouse.kind {
@@ -207,22 +204,6 @@ impl Backend for CrosstermBackend {
                         return Ok(None);
                     }
 
-                    // Handle global screen dump shortcuts at the lowest level
-                    if key_code == KB_F12 {
-                        if let Some(ref callback) = self.on_screen_dump {
-                            callback();
-                        }
-                        return Ok(None);
-                    }
-
-                    // Handle active view dump shortcut (Shift+F12)
-                    if key_code == KB_SHIFT_F12 {
-                        if let Some(ref callback) = self.on_view_dump {
-                            callback();
-                        }
-                        return Ok(None);
-                    }
-
                     // Create event preserving modifiers from original crossterm event
                     Ok(Some(Event {
                         what: EventType::Keyboard,
@@ -231,9 +212,7 @@ impl Backend for CrosstermBackend {
                         ..Event::nothing()
                     }))
                 }
-                CTEvent::Mouse(mouse) => {
-                    Ok(self.convert_mouse_event(mouse))
-                }
+                CTEvent::Mouse(mouse) => Ok(self.convert_mouse_event(mouse)),
                 CTEvent::Resize(_, _) => {
                     // Emit a broadcast so the application can re-layout
                     Ok(Some(Event::broadcast(crate::core::command::CM_REDRAW)))
@@ -259,11 +238,7 @@ impl Backend for CrosstermBackend {
 
     fn show_cursor(&mut self, x: u16, y: u16) -> io::Result<()> {
         let mut stdout = stdout();
-        execute!(
-            stdout,
-            cursor::MoveTo(x, y),
-            cursor::Show
-        )?;
+        execute!(stdout, cursor::MoveTo(x, y), cursor::Show)?;
         Ok(())
     }
 

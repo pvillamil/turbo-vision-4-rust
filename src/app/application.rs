@@ -4,16 +4,19 @@
 //! Manages the main application window, menu bar, status line, and desktop.
 //! Provides the central event loop and command dispatching system.
 
-use crate::core::command::{CM_CANCEL, CM_CASCADE, CM_COMMAND_SET_CHANGED, CM_HELP_INDEX, CM_QUIT, CM_REDRAW, CM_TILE, CommandId};
+use crate::core::command::{
+    CM_CANCEL, CM_CASCADE, CM_COMMAND_SET_CHANGED, CM_HELP_INDEX, CM_QUIT, CM_REDRAW,
+    CM_SCREENSHOT, CM_TILE, CommandId,
+};
 use crate::core::command_set;
 use crate::core::error::Result;
-use crate::core::event::{Event, EventType, KB_ALT_X, KB_F1};
+use crate::core::event::{Event, EventType, KB_ALT_X, KB_CTRL_F12, KB_F1, KB_F12};
 use crate::core::geometry::Rect;
 use crate::terminal::Terminal;
-use crate::views::{IdleView, View, desktop::Desktop, menu_bar::MenuBar, status_line::StatusLine};
+use crate::views::help_context::HelpContext;
 use crate::views::help_file::HelpFile;
 use crate::views::help_window::HelpWindow;
-use crate::views::help_context::HelpContext;
+use crate::views::{IdleView, View, desktop::Desktop, menu_bar::MenuBar, status_line::StatusLine};
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::time::Duration;
@@ -91,6 +94,16 @@ impl Application {
             help_file: None,
             help_context: HelpContext::new(),
         };
+
+        // Opt-in remote key injection for testing/automation. Off unless the
+        // TV_REMOTE_KEYS environment variable holds a port number.
+        if let Ok(port_str) = std::env::var("TV_REMOTE_KEYS") {
+            if let Ok(port) = port_str.trim().parse::<u16>() {
+                if let Err(e) = app.enable_remote_input(port) {
+                    log::warn!("TV_REMOTE_KEYS: failed to listen on port {port}: {e}");
+                }
+            }
+        }
 
         // Set initial Desktop bounds (adjusts for missing menu/status)
         // Matches Borland: TProgram::initDeskTop() with no menuBar/statusLine
@@ -252,9 +265,6 @@ impl Application {
     /// - Only calls idle() when there are NO events after timeout
     /// - This gives true event-driven behavior with minimal CPU usage
     pub fn get_event(&mut self) -> Option<Event> {
-        // Update active view bounds
-        self.update_active_view_bounds();
-
         // Draw everything (this is the key: drawing happens BEFORE getting events)
         // Matches Borland's CLY_Redraw() in getEvent
         self.draw();
@@ -262,7 +272,12 @@ impl Application {
 
         // Poll for event with 20ms timeout (matches magiblot's eventTimeoutMs)
         // This blocks until an event arrives or timeout occurs
-        match self.terminal.poll_event(Duration::from_millis(20)).ok().flatten() {
+        match self
+            .terminal
+            .poll_event(Duration::from_millis(20))
+            .ok()
+            .flatten()
+        {
             Some(event) => {
                 // Event received - return it immediately without calling idle()
                 // Matches magiblot: idle() is NOT called when events are present
@@ -304,15 +319,17 @@ impl Application {
         // Matches Borland: TProgram::execView() runs modal loop (tprogram.cc:184-194)
         // Matches magiblot: Only calls idle() when no events (true event-driven)
         loop {
-            // Update active view bounds
-            self.update_active_view_bounds();
-
             // Draw everything
             self.draw();
             let _ = self.terminal.flush();
 
             // Poll for event with 20ms timeout (blocks until event or timeout)
-            match self.terminal.poll_event(Duration::from_millis(20)).ok().flatten() {
+            match self
+                .terminal
+                .poll_event(Duration::from_millis(20))
+                .ok()
+                .flatten()
+            {
                 Some(mut event) => {
                     // Event received - handle it immediately without calling idle()
                     self.handle_event(&mut event);
@@ -351,7 +368,6 @@ impl Application {
         self.running = true;
 
         // Initial draw
-        self.update_active_view_bounds();
         self.draw();
         let _ = self.terminal.flush();
 
@@ -363,7 +379,6 @@ impl Application {
 
             if needs_draw {
                 // Explicit redraw requested (window closed, resize, palette change, etc.)
-                self.update_active_view_bounds();
                 self.draw();
                 self.needs_redraw = false;
                 let _ = self.terminal.flush();
@@ -371,7 +386,12 @@ impl Application {
 
             // Poll for event with 20ms timeout (matches magiblot's eventTimeoutMs)
             // This blocks until an event arrives or timeout occurs
-            match self.terminal.poll_event(Duration::from_millis(20)).ok().flatten() {
+            match self
+                .terminal
+                .poll_event(Duration::from_millis(20))
+                .ok()
+                .flatten()
+            {
                 Some(mut event) => {
                     // Event received - handle it immediately without calling idle()
                     // Matches magiblot: idle() is NOT called when events are present
@@ -379,7 +399,6 @@ impl Application {
 
                     // Event occurred: do full redraw for content changes
                     // This could be optimized further by tracking which views changed
-                    self.update_active_view_bounds();
                     self.draw();
                     let _ = self.terminal.flush();
                 }
@@ -416,18 +435,6 @@ impl Application {
                 // Just flush the terminal buffer
                 let _ = self.terminal.flush();
             }
-        }
-    }
-
-    fn update_active_view_bounds(&mut self) {
-        // The active view is the topmost window on the desktop (last child with shadow)
-        // Get the focused child from the desktop
-        let child_count = self.desktop.child_count();
-        if child_count > 0 {
-            let last_child = self.desktop.child_at(child_count - 1);
-            self.terminal.set_active_view_bounds(last_child.shadow_bounds());
-        } else {
-            self.terminal.clear_active_view_bounds();
         }
     }
 
@@ -478,6 +485,16 @@ impl Application {
                     self.running = false;
                     return;
                 }
+                KB_F12 => {
+                    self.dump_screen_ansi();
+                    event.clear();
+                    return;
+                }
+                KB_CTRL_F12 => {
+                    self.take_screenshot();
+                    event.clear();
+                    return;
+                }
                 _ => {}
             }
         }
@@ -523,10 +540,65 @@ impl Application {
                     self.show_help();
                     event.clear();
                 }
+                CM_SCREENSHOT => {
+                    self.take_screenshot();
+                    event.clear();
+                }
                 _ => {}
             }
         }
+    }
 
+    /// Enable the remote keyboard-input listener on the given TCP port.
+    ///
+    /// This is **off by default**. It is a thin wrapper around
+    /// [`Terminal::enable_remote_input`](crate::terminal::Terminal::enable_remote_input):
+    /// once enabled, key chords sent to `127.0.0.1:port` (e.g. `"CTRL+F12"`) are
+    /// injected into the event loop as real key presses. Useful for automated
+    /// testing of global shortcuts such as the Ctrl+F12 screenshot.
+    ///
+    /// It can also be enabled without code changes by setting the
+    /// `TV_REMOTE_KEYS` environment variable to the desired port.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the port cannot be bound.
+    pub fn enable_remote_input(&mut self, port: u16) -> Result<()> {
+        self.terminal.enable_remote_input(port)?;
+        Ok(())
+    }
+
+    /// Save a PNG screenshot of the current screen (bound to Ctrl+F12).
+    ///
+    /// The file is written to the current working directory with a
+    /// timestamped name like `screenshot-20260607-194800.png`. Rendering
+    /// queries the current font cell size; see
+    /// [`Terminal::save_screenshot_png`](crate::terminal::Terminal::save_screenshot_png).
+    pub fn take_screenshot(&mut self) {
+        let filename = format!(
+            "screenshot-{}.png",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        match self.terminal.save_screenshot_png(&filename) {
+            Ok(()) => log::info!("Screenshot saved to {filename}"),
+            Err(e) => log::warn!("Failed to save screenshot: {e}"),
+        }
+    }
+
+    /// Save an ASCII (ANSI-colored) dump of the whole screen (bound to F12).
+    ///
+    /// The file is written to the current working directory with a timestamped
+    /// name like `screen-20260607-194800.ans` and can be viewed with `cat` or
+    /// `less -R`. See [`Terminal::dump_screen`](crate::terminal::Terminal::dump_screen).
+    pub fn dump_screen_ansi(&mut self) {
+        let filename = format!(
+            "screen-{}.ans",
+            chrono::Local::now().format("%Y%m%d-%H%M%S")
+        );
+        match self.terminal.dump_screen(&filename) {
+            Ok(()) => log::info!("Screen dump saved to {filename}"),
+            Err(e) => log::warn!("Failed to save screen dump: {e}"),
+        }
     }
 
     // Help System Methods
@@ -690,10 +762,12 @@ impl Application {
     /// ```
     pub fn set_esc_timeout(&mut self, timeout_ms: u64) -> Result<()> {
         if timeout_ms < 250 || timeout_ms > 1500 {
-            return Err(crate::core::error::TurboVisionError::invalid_input(format!(
-                "ESC timeout must be between 250 and 1500 milliseconds, got {}",
-                timeout_ms
-            )));
+            return Err(crate::core::error::TurboVisionError::invalid_input(
+                format!(
+                    "ESC timeout must be between 250 and 1500 milliseconds, got {}",
+                    timeout_ms
+                ),
+            ));
         }
         self.terminal.set_esc_timeout(timeout_ms);
         Ok(())

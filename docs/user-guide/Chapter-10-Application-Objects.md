@@ -146,7 +146,6 @@ pub fn run(&mut self) {
     self.running = true;
 
     // Initial draw
-    self.update_active_view_bounds();
     self.draw();
     let _ = self.terminal.flush();
 
@@ -164,9 +163,6 @@ pub fn run(&mut self) {
 
         // Handle window movement
         let had_moved_windows = self.desktop.handle_moved_windows(&mut self.terminal);
-
-        // Update display as needed
-        self.update_active_view_bounds();
 
         // Optimized drawing - only redraw when needed
         if self.needs_redraw || had_moved_windows || had_event {

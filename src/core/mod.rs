@@ -45,18 +45,19 @@
 //! }
 //! ```
 
-pub mod geometry;
-pub mod draw;
-pub mod event;
+pub mod ansi;
+pub mod ansi_dump;
+pub mod clipboard;
 pub mod command;
 pub mod command_set;
-pub mod palette;
-pub mod clipboard;
-pub mod state;
-pub mod ansi_dump;
-pub mod ansi;
-pub mod menu_data;
-pub mod status_data;
-pub mod history;
+pub mod draw;
 pub mod error;
+pub mod event;
+pub mod geometry;
+pub mod history;
+pub mod menu_data;
+pub mod palette;
 pub mod palette_chain;
+pub mod screenshot;
+pub mod state;
+pub mod status_data;

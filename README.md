@@ -4,7 +4,7 @@
 
 A Rust implementation of the classic Borland Turbo Vision text user interface framework.
 
-**Version 1.0.0 - PRODUCTION READY** ✅
+**Version 1.3.0 - PRODUCTION READY** ✅
 
 Based on
 kloczek Borland Turbo Vision C++ port [here](https://github.com/kloczek/tvision)
@@ -68,7 +68,7 @@ The built-in file dialog with directory navigation, file list, and keyboard/mous
 - **SSH Support**: Optional SSH backend to serve TUI applications over SSH connections
 - **Modal Dialogs**: Built-in support for modal dialog execution
 - **Focus Management**: Tab navigation and keyboard shortcuts
-- **ANSI Dump**: Debug UI by dumping screen/views to ANSI text files (F12 for full screen, Shift+F12 for active view, with flash effect)
+- **Screen Capture**: F12 saves an ASCII (ANSI) dump of the whole screen; Ctrl+F12 saves a PNG screenshot. Programmatic dumps of screen/views/regions via `dump_screen`/`dump_region`/`dump_to_file`
 
 ## Quick Start
 
@@ -104,7 +104,11 @@ fn main() -> turbo_vision::core::error::Result<()> {
 }
 ```
 
-**Tip**: Press F12 at any time to capture full screen to `screen-dump.txt`, or F11 to capture active window/dialog to `active-view-dump.txt` - both with a visual flash effect for debugging!
+**Tip**: Capture the screen at any time —
+- **F12** saves an ASCII (ANSI-colored) dump of the whole screen to `screen-YYYYMMDD-HHMMSS.ans` (view it with `cat` or `less -R`).
+- **Ctrl+F12** saves a PNG screenshot of the whole screen to `screenshot-YYYYMMDD-HHMMSS.png`.
+
+For programmatic use, see `Terminal::dump_screen(path)`, `Terminal::dump_region(...)`, and `Terminal::save_screenshot_png(path)`.
 
 ## Palette System
 
@@ -293,7 +297,7 @@ SSH support is behind a feature flag. Enable it in your `Cargo.toml`:
 
 ```toml
 [dependencies]
-turbo-vision = { version = "1.0", features = ["ssh"] }
+turbo-vision = { version = "1.3", features = ["ssh"] }
 ```
 
 Or build with the feature:

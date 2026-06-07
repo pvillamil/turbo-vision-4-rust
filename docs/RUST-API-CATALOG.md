@@ -110,7 +110,7 @@ Generated: 2025-11-06
 
 #### Key Code Constants
 - KB_ESC, KB_ENTER, KB_BACKSPACE, KB_TAB, KB_SHIFT_TAB
-- KB_F1...KB_F12, KB_SHIFT_F12
+- KB_F1...KB_F12, KB_CTRL_F12
 - KB_UP, KB_DOWN, KB_LEFT, KB_RIGHT
 - KB_HOME, KB_END, KB_PGUP, KB_PGDN, KB_INS, KB_DEL
 - KB_ALT_X, KB_ALT_F, KB_ALT_H, KB_ALT_O, KB_ALT_A, KB_ALT_F3
@@ -320,9 +320,10 @@ Generated: 2025-11-06
 **Terminal Information:**
 - `size(&self) -> (u16, u16)` - Get terminal size (width, height)
 
-**Active View Management (for screen dumps):**
-- `set_active_view_bounds(&mut self, bounds: Rect)` - Set bounds of active view
-- `clear_active_view_bounds(&mut self)` - Clear active view bounds
+**Screen Capture:**
+- `dump_screen(&self, path: &str)` - Write an ASCII (ANSI) dump of the whole screen
+- `dump_region(&self, x, y, w, h, path: &str)` - Dump a rectangular region
+- `save_screenshot_png(&self, path: &str)` - Render the screen to a PNG
 
 **Clipping Region:**
 - `push_clip(&mut self, rect: Rect)` - Push clipping region onto stack

@@ -30,8 +30,8 @@ pub const KB_F8: KeyCode = 0x4200;
 pub const KB_F9: KeyCode = 0x4300;
 pub const KB_F10: KeyCode = 0x4400;
 pub const KB_F11: KeyCode = 0x8500;
-pub const KB_F12: KeyCode = 0x8600;
-pub const KB_SHIFT_F12: KeyCode = 0x8601; // Shift+F12 for active view dump
+pub const KB_F12: KeyCode = 0x8600; // F12 for ASCII screen dump
+pub const KB_CTRL_F12: KeyCode = 0x8602; // Ctrl+F12 for PNG screenshot
 
 // Arrow keys
 pub const KB_UP: KeyCode = 0x4800;
@@ -231,7 +231,11 @@ impl Event {
     pub fn mouse(event_type: EventType, pos: Point, buttons: u8, double_click: bool) -> Self {
         Self {
             what: event_type,
-            mouse: MouseEvent { pos, buttons, double_click },
+            mouse: MouseEvent {
+                pos,
+                buttons,
+                double_click,
+            },
             ..Self::nothing()
         }
     }
@@ -274,11 +278,27 @@ impl fmt::Display for Event {
                 "Event::MouseDown({}, buttons={:#04x}{})",
                 self.mouse.pos,
                 self.mouse.buttons,
-                if self.mouse.double_click { ", double_click" } else { "" }
+                if self.mouse.double_click {
+                    ", double_click"
+                } else {
+                    ""
+                }
             ),
-            EventType::MouseUp => write!(f, "Event::MouseUp({}, buttons={:#04x})", self.mouse.pos, self.mouse.buttons),
-            EventType::MouseMove => write!(f, "Event::MouseMove({}, buttons={:#04x})", self.mouse.pos, self.mouse.buttons),
-            EventType::MouseAuto => write!(f, "Event::MouseAuto({}, buttons={:#04x})", self.mouse.pos, self.mouse.buttons),
+            EventType::MouseUp => write!(
+                f,
+                "Event::MouseUp({}, buttons={:#04x})",
+                self.mouse.pos, self.mouse.buttons
+            ),
+            EventType::MouseMove => write!(
+                f,
+                "Event::MouseMove({}, buttons={:#04x})",
+                self.mouse.pos, self.mouse.buttons
+            ),
+            EventType::MouseAuto => write!(
+                f,
+                "Event::MouseAuto({}, buttons={:#04x})",
+                self.mouse.pos, self.mouse.buttons
+            ),
             EventType::MouseWheelUp => write!(f, "Event::MouseWheelUp({})", self.mouse.pos),
             EventType::MouseWheelDown => write!(f, "Event::MouseWheelDown({})", self.mouse.pos),
             EventType::Command => write!(f, "Event::Command({:#06x})", self.command),
@@ -354,7 +374,8 @@ impl EscSequenceTracker {
     pub fn check_timeout(&mut self) -> Option<KeyCode> {
         if self.waiting_for_char {
             if let Some(last_time) = self.last_esc_time {
-                if Instant::now().duration_since(last_time) > Duration::from_millis(self.timeout_ms) {
+                if Instant::now().duration_since(last_time) > Duration::from_millis(self.timeout_ms)
+                {
                     self.last_esc_time = None;
                     self.waiting_for_char = false;
                     return Some(KB_ESC);
@@ -397,7 +418,9 @@ impl EscSequenceTracker {
 
             // Check if within time limit (treat as ALT+letter)
             if let Some(last_time) = esc_time {
-                if Instant::now().duration_since(last_time) <= Duration::from_millis(self.timeout_ms) {
+                if Instant::now().duration_since(last_time)
+                    <= Duration::from_millis(self.timeout_ms)
+                {
                     // Map ESC+letter to ALT codes (for macOS Alt emulation)
                     // This makes ESC+F identical to Alt+F from the application's perspective
                     if let CKC::Char(c) = key.code {
@@ -416,6 +439,102 @@ impl EscSequenceTracker {
 
         crossterm_to_keycode(key)
     }
+}
+
+/// Parse a base (non-modifier) key name into a crossterm key code.
+///
+/// `upper` is the upper-cased token; `original` preserves the original case so
+/// single characters keep their casing.
+fn parse_base_key(upper: &str, original: &str) -> Option<CKC> {
+    // Function keys: F1..=F12
+    if let Some(num) = upper.strip_prefix('F') {
+        if let Ok(n) = num.parse::<u8>() {
+            if (1..=12).contains(&n) {
+                return Some(CKC::F(n));
+            }
+        }
+    }
+
+    let code = match upper {
+        "ENTER" | "RETURN" => CKC::Enter,
+        "ESC" | "ESCAPE" => CKC::Esc,
+        "TAB" => CKC::Tab,
+        "BACKTAB" => CKC::BackTab,
+        "SPACE" => CKC::Char(' '),
+        "BACKSPACE" | "BKSP" | "BS" => CKC::Backspace,
+        "DEL" | "DELETE" => CKC::Delete,
+        "INS" | "INSERT" => CKC::Insert,
+        "HOME" => CKC::Home,
+        "END" => CKC::End,
+        "PGUP" | "PAGEUP" => CKC::PageUp,
+        "PGDN" | "PAGEDOWN" => CKC::PageDown,
+        "UP" => CKC::Up,
+        "DOWN" => CKC::Down,
+        "LEFT" => CKC::Left,
+        "RIGHT" => CKC::Right,
+        _ => {
+            // Any single character is taken literally (preserving its case).
+            let mut chars = original.chars();
+            let c = chars.next()?;
+            if chars.next().is_some() {
+                return None; // multi-character unknown token
+            }
+            CKC::Char(c)
+        }
+    };
+    Some(code)
+}
+
+/// Parse a human-readable key chord into an [`Event`].
+///
+/// A chord is a base key optionally prefixed with `+`-joined modifiers, for
+/// example `"CTRL+F12"`, `"ALT+X"`, `"SHIFT+TAB"`, `"ENTER"`, or `"a"`. Parsing
+/// is case-insensitive for key names and modifiers.
+///
+/// Recognized modifiers: `CTRL`/`CONTROL`, `ALT`/`OPT`/`OPTION`/`META`, `SHIFT`.
+/// Recognized keys: `F1`..`F12`, `ENTER`/`RETURN`, `ESC`/`ESCAPE`, `TAB`,
+/// `BACKTAB`, `SPACE`, `BACKSPACE`, `DEL`/`DELETE`, `INS`/`INSERT`, `HOME`,
+/// `END`, `PGUP`/`PAGEUP`, `PGDN`/`PAGEDOWN`, `UP`, `DOWN`, `LEFT`, `RIGHT`,
+/// and any single character.
+///
+/// Returns `None` if the chord cannot be parsed into a known key code. The
+/// resulting event is identical to what the corresponding physical key press
+/// would produce, because it routes through the same conversion logic.
+pub fn parse_key_chord(chord: &str) -> Option<Event> {
+    let mut modifiers = KeyModifiers::empty();
+    let mut base: Option<CKC> = None;
+
+    for part in chord.split('+') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let upper = part.to_ascii_uppercase();
+        match upper.as_str() {
+            "CTRL" | "CONTROL" => modifiers |= KeyModifiers::CONTROL,
+            "ALT" | "OPT" | "OPTION" | "META" => modifiers |= KeyModifiers::ALT,
+            "SHIFT" => modifiers |= KeyModifiers::SHIFT,
+            _ => {
+                if base.is_some() {
+                    return None; // more than one base key
+                }
+                base = Some(parse_base_key(&upper, part)?);
+            }
+        }
+    }
+
+    let code = base?;
+    let key = KeyEvent::new(code, modifiers);
+    let key_code = crossterm_to_keycode(key);
+    if key_code == 0 {
+        return None;
+    }
+    Some(Event {
+        what: EventType::Keyboard,
+        key_code,
+        key_modifiers: modifiers,
+        ..Event::nothing()
+    })
 }
 
 /// Convert crossterm KeyEvent to our KeyCode
@@ -486,12 +605,50 @@ fn crossterm_to_keycode(key: KeyEvent) -> KeyCode {
         CKC::F(10) => KB_F10,
         CKC::F(11) => KB_F11,
         CKC::F(12) => {
-            if key.modifiers.contains(KeyModifiers::SHIFT) {
-                KB_SHIFT_F12
+            if key.modifiers.contains(KeyModifiers::CONTROL) {
+                KB_CTRL_F12
             } else {
                 KB_F12
             }
         }
         _ => 0,
+    }
+}
+
+#[cfg(test)]
+mod chord_tests {
+    use super::*;
+
+    #[test]
+    fn parses_ctrl_f12() {
+        let ev = parse_key_chord("CTRL+F12").unwrap();
+        assert_eq!(ev.what, EventType::Keyboard);
+        assert_eq!(ev.key_code, KB_CTRL_F12);
+    }
+
+    #[test]
+    fn parses_plain_and_shift_f12() {
+        assert_eq!(parse_key_chord("F12").unwrap().key_code, KB_F12);
+        assert_eq!(parse_key_chord("ctrl+f12").unwrap().key_code, KB_CTRL_F12);
+    }
+
+    #[test]
+    fn parses_alt_x_case_insensitive() {
+        assert_eq!(parse_key_chord("ALT+X").unwrap().key_code, KB_ALT_X);
+        assert_eq!(parse_key_chord("alt+x").unwrap().key_code, KB_ALT_X);
+    }
+
+    #[test]
+    fn parses_named_keys() {
+        assert_eq!(parse_key_chord("ENTER").unwrap().key_code, KB_ENTER);
+        assert_eq!(parse_key_chord("esc").unwrap().key_code, KB_ESC);
+        assert_eq!(parse_key_chord("Tab").unwrap().key_code, KB_TAB);
+    }
+
+    #[test]
+    fn rejects_garbage() {
+        assert!(parse_key_chord("NOPEKEY").is_none());
+        assert!(parse_key_chord("CTRL+").is_none());
+        assert!(parse_key_chord("").is_none());
     }
 }

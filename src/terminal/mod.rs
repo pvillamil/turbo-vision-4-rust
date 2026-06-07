@@ -54,6 +54,7 @@
 
 mod backend;
 mod crossterm_backend;
+pub mod remote_input;
 
 #[cfg(feature = "ssh")]
 mod input_parser;
@@ -68,13 +69,14 @@ pub use input_parser::InputParser;
 #[cfg(feature = "ssh")]
 pub use ssh_backend::{SshBackend, SshSessionBuilder, SshSessionHandle};
 
+use crate::core::ansi_dump;
 use crate::core::draw::Cell;
+use crate::core::error::Result;
 use crate::core::event::Event;
 use crate::core::geometry::{Point, Rect};
 use crate::core::palette::Attr;
-use crate::core::ansi_dump;
-use crate::core::error::Result;
 use std::io::{self, Write};
+use std::sync::mpsc::Receiver;
 use std::time::Duration;
 
 /// Terminal abstraction for rendering and input handling.
@@ -89,8 +91,10 @@ pub struct Terminal {
     width: u16,
     height: u16,
     clip_stack: Vec<Rect>,
-    active_view_bounds: Option<Rect>,
     pending_event: Option<Event>,
+    /// Receiver for keyboard events injected by the remote-input listener.
+    /// `None` unless [`enable_remote_input`](Self::enable_remote_input) was called.
+    injected_rx: Option<Receiver<Event>>,
 }
 
 impl Terminal {
@@ -174,8 +178,8 @@ impl Terminal {
             width,
             height,
             clip_stack: Vec::new(),
-            active_view_bounds: None,
             pending_event: None,
+            injected_rx: None,
         })
     }
 
@@ -315,16 +319,6 @@ impl Terminal {
         // This is a workaround since we can't downcast trait objects easily
         // In practice, we'd use Any trait for downcasting
         None // For now, ESC timeout only works via Terminal::init()
-    }
-
-    /// Set the bounds of the currently active view (for F11 screen dumps).
-    pub fn set_active_view_bounds(&mut self, bounds: Rect) {
-        self.active_view_bounds = Some(bounds);
-    }
-
-    /// Clear the active view bounds.
-    pub fn clear_active_view_bounds(&mut self) {
-        self.active_view_bounds = None;
     }
 
     /// Force a full screen redraw on the next flush.
@@ -470,7 +464,11 @@ impl Terminal {
                 // Set colors using true color (RGB) for accurate CGA colors
                 let (fg_r, fg_g, fg_b) = current_attr.fg.to_rgb();
                 let (bg_r, bg_g, bg_b) = current_attr.bg.to_rgb();
-                write!(output, "\x1b[38;2;{};{};{};48;2;{};{};{}m", fg_r, fg_g, fg_b, bg_r, bg_g, bg_b)?;
+                write!(
+                    output,
+                    "\x1b[38;2;{};{};{};48;2;{};{};{}m",
+                    fg_r, fg_g, fg_b, bg_r, bg_g, bg_b
+                )?;
 
                 // Write the changed characters
                 for i in start_x..x {
@@ -516,11 +514,37 @@ impl Terminal {
         self.pending_event = Some(event);
     }
 
+    /// Enable the remote keyboard-input listener on the given TCP port.
+    ///
+    /// This is **off by default**. Once enabled, the terminal listens on
+    /// `127.0.0.1:port` and injects key chords received over the socket into the
+    /// event stream returned by [`poll_event`](Self::poll_event), as if they had
+    /// been typed. See [`remote_input`] for the wire format. Intended for
+    /// testing and automation (for example, triggering Ctrl+F12 screenshots on
+    /// terminals that do not forward that chord).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the port cannot be bound.
+    pub fn enable_remote_input(&mut self, port: u16) -> io::Result<()> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        remote_input::spawn(port, tx)?;
+        self.injected_rx = Some(rx);
+        Ok(())
+    }
+
     /// Poll for an event with timeout.
     pub fn poll_event(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
         // Check for pending event first
         if let Some(event) = self.pending_event.take() {
             return Ok(Some(event));
+        }
+
+        // Then any event injected by the remote-input listener.
+        if let Some(rx) = &self.injected_rx {
+            if let Ok(event) = rx.try_recv() {
+                return Ok(Some(event));
+            }
         }
 
         self.backend.poll_event(timeout)
@@ -535,13 +559,73 @@ impl Terminal {
         }
     }
 
+    /// Query the pixel size of a single character cell ("the current font").
+    ///
+    /// Returns `(cell_width_px, cell_height_px)` derived from the terminal's
+    /// reported window size, or `None` if the terminal does not report pixel
+    /// dimensions. This is used to render screenshots at the same resolution
+    /// the font is actually displayed at.
+    pub fn query_font_pixel_size() -> Option<(u16, u16)> {
+        use crossterm::terminal::window_size;
+
+        if let Ok(ws) = window_size() {
+            if ws.columns > 0 && ws.rows > 0 && ws.width > 0 && ws.height > 0 {
+                return Some((ws.width / ws.columns, ws.height / ws.rows));
+            }
+        }
+        None
+    }
+
+    /// Render the current screen buffer to a PNG file.
+    ///
+    /// The image is built from the embedded 8x16 bitmap font using an *integer*
+    /// magnification, so glyphs stay crisp and keep the font's proportions. The
+    /// scale is derived from the current font cell height reported by the
+    /// terminal (so a larger on-screen font yields a larger image); it falls
+    /// back to 1x when the terminal does not report pixel sizes. See
+    /// [`crate::core::screenshot`] for rendering details.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the file cannot be created or written.
+    pub fn save_screenshot_png(&self, path: &str) -> io::Result<()> {
+        use crate::core::screenshot::{self, GLYPH_HEIGHT};
+        // Pick the integer scale whose glyph height is closest to the real cell
+        // height (rounding), clamped to a sane range.
+        let scale = match Self::query_font_pixel_size() {
+            Some((_, ch)) if ch > 0 => {
+                ((ch as usize + GLYPH_HEIGHT / 2) / GLYPH_HEIGHT).clamp(1, 8)
+            }
+            _ => 1,
+        };
+        screenshot::render_to_png(
+            &self.buffer,
+            self.width as usize,
+            self.height as usize,
+            scale,
+            std::path::Path::new(path),
+        )
+    }
+
     /// Dump the entire screen buffer to an ANSI text file for debugging.
     pub fn dump_screen(&self, path: &str) -> io::Result<()> {
-        ansi_dump::dump_buffer_to_file(&self.buffer, self.width as usize, self.height as usize, path)
+        ansi_dump::dump_buffer_to_file(
+            &self.buffer,
+            self.width as usize,
+            self.height as usize,
+            path,
+        )
     }
 
     /// Dump a rectangular region of the screen to an ANSI text file.
-    pub fn dump_region(&self, x: u16, y: u16, width: u16, height: u16, path: &str) -> io::Result<()> {
+    pub fn dump_region(
+        &self,
+        x: u16,
+        y: u16,
+        width: u16,
+        height: u16,
+        path: &str,
+    ) -> io::Result<()> {
         let mut file = std::fs::File::create(path)?;
         ansi_dump::dump_buffer_region(
             &mut file,

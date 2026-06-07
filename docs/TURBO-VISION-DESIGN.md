@@ -1447,8 +1447,7 @@ void THardwareInfo::waitForEvents(int timeoutMs) noexcept
 ```rust
 // src/app/application.rs
 pub fn get_event(&mut self) -> Option<Event> {
-    // Update and draw first
-    self.update_active_view_bounds();
+    // Draw first
     self.draw();
     let _ = self.terminal.flush();
 
@@ -2867,123 +2866,71 @@ After fixes, the FileDialog should:
 
 ---
 
-# Screen Dump System
+# Screen Capture System
 
 ## Overview
 
-The screen dump system provides global keyboard shortcuts to capture terminal output for debugging, documentation, and testing. It works at the Terminal level, ensuring universal availability without requiring integration code.
+The screen capture system provides two global keyboard shortcuts to save the current screen for debugging, documentation, and testing. Both capture the **whole screen** and write a timestamped file to the working directory.
 
 ## Keyboard Shortcuts
 
-Two shortcuts are available at any time during application execution:
+Available at any time during application execution (including inside modal dialogs):
 
-- **F12** - Dump entire screen to `screen-dump.txt`
-- **Shift+F12** - Dump active window/dialog to `active-view-dump.txt`
+- **F12** — ASCII (ANSI-colored) dump of the whole screen → `screen-YYYYMMDD-HHMMSS.ans`
+- **Ctrl+F12** — PNG screenshot of the whole screen → `screenshot-YYYYMMDD-HHMMSS.png`
 
-Both shortcuts provide:
-- **Visual Feedback**: Brief screen flash (color inversion) to confirm capture
-- **Silent Operation**: Errors don't crash the app
-- **Instant Capture**: Screen is captured immediately in its current state
+The shortcuts operate silently (errors are logged, never crash the app) and capture the screen in its current state. The outcome is reported via the `log` crate (`log::info!`/`log::warn!`).
 
 ## Usage
 
 ### Basic Usage
 
-Simply press the shortcuts while your application is running:
+Just press the shortcuts while your application is running:
 
 ```rust
 use turbo_vision::app::Application;
 
-fn main() -> std::io::Result<()> {
+fn main() -> turbo_vision::core::error::Result<()> {
     let mut app = Application::new()?;
     // ... set up your UI ...
-    app.run();  // Press F12 or Shift+F12 anytime!
+    app.run();  // Press F12 (ASCII) or Ctrl+F12 (PNG) anytime!
     Ok(())
 }
 ```
 
-### Viewing Dumps
+The PNG / `CM_SCREENSHOT` capture can also be triggered from a clickable status-line item or menu entry (see `examples/screenshot.rs`). On terminals that do not forward `Ctrl+F12`, the optional remote-input listener can inject it (see the Remote Input section).
+
+### Viewing Captures
 
 ```bash
-cat screen-dump.txt           # View full screen dump
-cat active-view-dump.txt      # View active window/dialog dump
-less -R screen-dump.txt       # For scrollable viewing
+cat screen-*.ans          # View an ASCII dump (ANSI colors)
+less -R screen-*.ans      # Scrollable viewing
+open screenshot-*.png     # Open a PNG screenshot (macOS)
 ```
 
-## Architecture: Terminal-Level Implementation
+## Architecture: Application-Level Shortcuts
 
-The shortcuts are implemented at the **Terminal level** in `poll_event()` and `read_event()`, providing significant architectural benefits:
+The two shortcuts are handled in `Application::handle_event()` as **global pre-dispatch shortcuts** — intercepted before any view sees the key, so a focused widget can't accidentally consume them. They live where the cell buffer is accessible:
 
-### Benefits
+- **F12** → `Application::dump_screen_ansi()` → `Terminal::dump_screen(path)`
+- **Ctrl+F12** → `Application::take_screenshot()` (also reachable via the `CM_SCREENSHOT` command) → `Terminal::save_screenshot_png(path)`
 
-1. **Universal Availability** - Works everywhere without any integration:
-   - ✅ `Application::run()` event loop
-   - ✅ `Dialog::execute()` event loop
-   - ✅ Custom event loops
-   - ✅ Any code that calls `terminal.poll_event()` or `terminal.read_event()`
-
-2. **Zero Configuration** - No need to:
-   - Add hooks in Application
-   - Add hooks in Dialog
-   - Add hooks in every custom event loop
-   - Remember to call special handler functions
-
-3. **Cannot Be Blocked** - Since shortcuts are handled before events are returned:
-   - Event handlers can't accidentally consume the shortcut
-   - Always works, regardless of application state
-
-4. **Clean Separation of Concerns**:
-   - Terminal layer: Handles low-level I/O and global system shortcuts
-   - Application layer: Handles business logic and UI events
-   - View layer: Handles widget-specific behavior
-
-### Implementation
-
-```rust
-// In Terminal::poll_event()
-if key_code == KB_F12 {
-    let _ = self.flash();
-    let _ = self.dump_screen("screen-dump.txt");
-    return Ok(None);  // Event consumed, not propagated
-}
-
-if key_code == KB_SHIFT_F12 {
-    let _ = self.flash();
-    if let Some(bounds) = self.active_view_bounds {
-        let _ = self.dump_region(..., "active-view-dump.txt");
-    }
-    return Ok(None);  // Event consumed, not propagated
-}
-```
-
-### Visual Flash Effect
-
-The flash effect provides clear visual feedback:
-
-1. Saves the current buffer
-2. Inverts all foreground and background colors
-3. Flushes the inverted screen
-4. Waits 50ms
-5. Restores the original buffer
-6. Flushes the restored screen
-
-This provides immediate confirmation that the capture succeeded.
+Because both `Application::run()` and the modal `exec_view()` loop route through `handle_event()`, the shortcuts work in both contexts.
 
 ## Programmatic API
 
 ### High-Level API
 
 ```rust
-// Dump entire screen
-terminal.dump_screen("screen.ans")?;
+// ASCII (ANSI) dumps
+terminal.dump_screen("screen.ans")?;               // whole screen
+terminal.dump_region(10, 5, 40, 20, "region.ans")?; // a region
+dialog.dump_to_file(&terminal, "dialog.ans")?;      // any View implementor
 
-// Dump a specific view (works with any View implementor)
-dialog.dump_to_file(&terminal, "dialog.ans")?;
+// PNG screenshot of the whole screen (embedded Spleen 8x16 bitmap font)
+terminal.save_screenshot_png("screenshot.png")?;
 
-// Dump a specific region
-terminal.dump_region(10, 5, 40, 20, "region.ans")?;
-
-// Flash the screen manually
+// Flash the screen (color inversion) for manual visual feedback
 terminal.flash()?;
 ```
 
@@ -2992,7 +2939,7 @@ terminal.flash()?;
 ```rust
 use turbo_vision::core::ansi_dump;
 
-// Get buffer and dump it manually
+// Get the buffer and dump it manually
 let buffer = terminal.buffer();
 ansi_dump::dump_buffer_to_file(buffer, width, height, "custom.ans")?;
 
@@ -3001,29 +2948,19 @@ let mut writer = std::io::stdout();
 ansi_dump::dump_buffer(&mut writer, buffer, width, height)?;
 ```
 
-## File Format
+## File Formats
 
-The generated files use standard ANSI escape sequences:
-- `\x1b[XXm` for foreground colors (30-37, 90-97)
-- `\x1b[XXm` for background colors (40-47, 100-107)
-- `\x1b[0m` to reset colors at end of each line
-
-Files can be viewed on any system with ANSI support using `cat`, `less -R`, or text editors.
-
-## Use Cases
-
-1. **Debugging** - Visualize exactly what's in the terminal buffer
-2. **Bug Reports** - Users can press F12 and send you the output file
-3. **Documentation** - Capture screenshots of terminal UI
-4. **Testing** - Create visual regression tests
-5. **Development** - Quickly inspect layout issues
+- **`.ans`** — standard ANSI escape sequences (true-color `\x1b[38;2;..m` / `\x1b[48;2;..m`, reset per line); viewable with `cat`, `less -R`, or any ANSI-aware editor.
+- **`.png`** — 8-bit RGB PNG produced by a self-contained encoder (no external crates), rasterizing each cell with the embedded **Spleen 8x16** bitmap font (BSD-2-Clause) and procedurally-drawn box/block/shade/arrow glyphs.
 
 ## Implementation Files
 
-- `src/core/ansi_dump.rs` - ANSI dump functionality
-- `src/terminal/mod.rs` - Terminal methods and shortcut handlers
-- `src/views/view.rs` - View trait `dump_to_file()` method
-- `examples/dump_demo.rs` - Complete working example
+- `src/core/ansi_dump.rs` — ANSI dump functionality
+- `src/core/screenshot.rs` — PNG encoder, embedded font, glyph rendering
+- `src/app/application.rs` — F12 / Ctrl+F12 global shortcut handlers
+- `src/terminal/mod.rs` — `dump_screen`, `dump_region`, `save_screenshot_png`
+- `src/views/view.rs` — `View::dump_to_file()`
+- `examples/screenshot.rs` — complete working example
 
 ---
 
@@ -3575,7 +3512,7 @@ The Terminal module provides the interface between turbo-vision and the physical
 │  • Differential screen updates                               │
 │  • Clipping region management                                │
 │  • Event queuing (put_event/poll_event)                     │
-│  • Screen dump support (F12/Shift+F12)                      │
+│  • Screen capture: F12 ASCII / Ctrl+F12 PNG                 │
 │  • ESC sequence tracking (macOS Alt emulation)              │
 └────────────────────────────┬────────────────────────────────┘
                              │

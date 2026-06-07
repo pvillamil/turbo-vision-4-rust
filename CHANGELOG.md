@@ -5,6 +5,42 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.3.0] - 2026-06-07
+
+### Added
+- **Screen capture shortcuts** — two consolidated global shortcuts, both capturing the whole screen:
+  - **F12** → ASCII (ANSI-colored) dump to a timestamped `screen-YYYYMMDD-HHMMSS.ans` file (`Application::dump_screen_ansi()`, wrapping `Terminal::dump_screen`)
+  - **Ctrl+F12** → PNG screenshot to a timestamped `screenshot-YYYYMMDD-HHMMSS.png` file (`Application::take_screenshot()` / `CM_SCREENSHOT`)
+- **PNG Screenshots** (`src/core/screenshot.rs`)
+  - New `Terminal::save_screenshot_png(path)` renders the current screen buffer to a true-color PNG using the embedded **Spleen 8x16** bitmap font (BSD-2-Clause; see `fonts/Spleen-LICENSE`) with crisp integer scaling derived from the terminal's reported font cell height; Turbo Vision box-drawing (single and double, with correct corner joinery), block, shade, arrow, and corner-resize (`◢`) glyphs are rendered procedurally so frames tile cleanly at any scale
+  - New `Terminal::query_font_pixel_size()` reports the current font cell size in pixels (falls back to 8x16 when the terminal does not report pixel dimensions)
+  - Self-contained PNG encoder (no new dependencies): RGB, 8-bit, stored DEFLATE blocks with CRC-32 / Adler-32 checksums
+  - New `CM_SCREENSHOT` command, also triggerable from a clickable status-line item or menu entry
+- **Remote Input over TCP** (`src/terminal/remote_input.rs`) — disabled by default
+  - `Terminal::enable_remote_input(port)` / `Application::enable_remote_input(port)` start a `127.0.0.1`-only TCP listener that injects events into the event loop; also enabled without code changes via the `TV_REMOTE_KEYS` environment variable (port number)
+  - Key lines contain whitespace-separated chords in human format (e.g. `CTRL+F12` or `CTRL+F12 ALT+X`), parsed by the new public `core::event::parse_key_chord()`; mouse lines (`CLICK x y`, `RCLICK x y`, `MCLICK x y`) inject button-down/up at 0-indexed cell coordinates. Primarily a testing/automation aid (e.g. triggering Ctrl+F12 on terminals that do not forward that chord)
+  - New `examples/screenshot.rs` demonstrating the screenshot feature and remote-input testing
+
+### Removed
+- The unused Shift+F12 "active view" ASCII dump and its plumbing (`KB_SHIFT_F12`, the backend `on_screen_dump`/`on_view_dump` callbacks, and `Terminal::set_active_view_bounds`/`clear_active_view_bounds`). Screen capture is now F12 (ASCII) and Ctrl+F12 (PNG); per-view dumps remain available programmatically via `View::dump_to_file` / `Terminal::dump_region`.
+
+## [1.2.0] - 2026-05-04
+
+### Added
+- **LogWindow** (#87): a scrollable log view with a `tracing::Subscriber` integration for capturing structured logs inside the TUI
+- **Multi-editor support**: window auto-close, `Desktop::contains_id()`, and `Group` `view_id` synchronization on removal
+- **Editor**: trait-level edit operations, atomic paste, `can_undo()`/`can_redo()`, and a cursor position accessor
+- **StatusLine**: context-sensitive hint text with truncation, and automatic greying-out of items whose `CommandId` is currently disabled
+- CI workflow for publishing to crates.io
+
+### Fixed
+- Emoji/wide-character width handling in window titles
+- `CM_REDRAW` broadcast on terminal resize for correct re-layout
+- ESC+letter (macOS Alt emulation) handling
+- Bounds double-offset for nested views (#95) and dialog drag artifacts
+- Mouse-drag scroll vanishing on negative delta
+- MsgBox word-wraps long messages and left-aligns them
+
 ## [1.1.1] - 2026-04-10
 
 ### Added
