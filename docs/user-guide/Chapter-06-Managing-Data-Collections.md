@@ -1,6 +1,6 @@
 # Chapter 6: Managing Data Collections
 
-**Previous:** [Chapter 5 — Creating Data Entry Forms](Chapter-5-Creating-Data-Entry-Forms.md)
+**Previous:** [Chapter 5 — Creating Data Entry Forms](Chapter-05-Creating-Data-Entry-Forms.md)
 
 ---
 
@@ -1005,4 +1005,4 @@ These changes make the Rust version more robust and safer while maintaining the 
 
 ---
 
-**Next:** [Chapter 7 — Architecture Overview](Chapter-7-Architecture-Overview.md)
+**Next:** [Chapter 7 — Architecture Overview](Chapter-07-Architecture-Overview.md)

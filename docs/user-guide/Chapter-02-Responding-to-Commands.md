@@ -1,6 +1,6 @@
 # Chapter 2 — Responding to Commands
 
-**Previous:** [Chapter 1 — Stepping into Turbo Vision](Chapter-1-Stepping-into-Turbo-Vision.md)
+**Previous:** [Chapter 1 — Stepping into Turbo Vision](Chapter-01-Stepping-into-Turbo-Vision.md)
 
 ---
 
@@ -508,4 +508,4 @@ In the next chapter, you'll learn how to **add windows** to your Turbo Vision ap
 
 ---
 
-**Next:** [Chapter 3 — Adding Windows](Chapter-3-Adding-Windows.md)
+**Next:** [Chapter 3 — Adding Windows](Chapter-03-Adding-Windows.md)

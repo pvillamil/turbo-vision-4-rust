@@ -1,6 +1,6 @@
 # Event-driven programming
 
-**Previous:** [Chapter 8 — Views and Groups](Chapter-8-Views-and-Groups.md)
+**Previous:** [Chapter 8 — Views and Groups](Chapter-08-Views-and-Groups.md)
 
 ---
 

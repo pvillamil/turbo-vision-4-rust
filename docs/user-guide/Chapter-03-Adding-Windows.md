@@ -1,6 +1,6 @@
 # Chapter 3 — Adding Windows
 
-**Previous:** [Chapter 2 — Responding to Commands](Chapter-2-Responding-to-Commands.md)
+**Previous:** [Chapter 2 — Responding to Commands](Chapter-02-Responding-to-Commands.md)
 
 ---
 
@@ -579,4 +579,4 @@ app.desktop.add(window);
 
 ---
 
-**Next:** [Chapter 4 — Persistence and Configuration](Chapter-4-Persistence-and-Configuration.md)
+**Next:** [Chapter 4 — Persistence and Configuration](Chapter-04-Persistence-and-Configuration.md)

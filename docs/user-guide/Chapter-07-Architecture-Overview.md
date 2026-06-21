@@ -1,6 +1,6 @@
 # Chapter 7: Architecture Overview
 
-**Previous:** [Chapter 6 — Managing Data Collections](Chapter-6-Managing-Data-Collections.md)
+**Previous:** [Chapter 6 — Managing Data Collections](Chapter-06-Managing-Data-Collections.md)
 
 ---
 
@@ -620,4 +620,4 @@ if matches!(event.what, EventType::MouseDown | EventType::MouseUp | EventType::M
 
 ---
 
-**Next:** [Chapter 8 — Views and Groups](Chapter-8-Views-and-Groups.md)
+**Next:** [Chapter 8 — Views and Groups](Chapter-08-Views-and-Groups.md)

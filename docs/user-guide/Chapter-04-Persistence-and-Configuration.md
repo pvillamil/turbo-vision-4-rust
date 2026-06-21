@@ -1,6 +1,6 @@
 # Chapter 4: Persistence and Configuration
 
-**Previous:** [Chapter 3 — Adding Windows](Chapter-3-Adding-Windows.md)
+**Previous:** [Chapter 3 — Adding Windows](Chapter-03-Adding-Windows.md)
 
 ---
 
@@ -564,4 +564,4 @@ The current Rust implementation prioritizes compile-time safety and simplicity o
 
 ---
 
-**Next:** [Chapter 5 — Creating Data Entry Forms](Chapter-5-Creating-Data-Entry-Forms.md)
+**Next:** [Chapter 5 — Creating Data Entry Forms](Chapter-05-Creating-Data-Entry-Forms.md)
