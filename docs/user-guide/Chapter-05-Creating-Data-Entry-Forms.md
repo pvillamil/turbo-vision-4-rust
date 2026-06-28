@@ -1,6 +1,6 @@
 # Chapter 5: Creating Data-Entry Forms
 
-**Previous:** [Chapter 4 — Persistence and Configuration](Chapter-4-Persistence-and-Configuration.md)
+**Previous:** [Chapter 4 — Persistence and Configuration](Chapter-04-Persistence-and-Configuration.md)
 
 ---
 
@@ -919,4 +919,4 @@ These patterns provide the same functionality as the Pascal original while lever
 
 ---
 
-**Next:** [Chapter 6 — Managing Data Collections](Chapter-6-Managing-Data-Collections.md)
+**Next:** [Chapter 6 — Managing Data Collections](Chapter-06-Managing-Data-Collections.md)

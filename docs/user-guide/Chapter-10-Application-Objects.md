@@ -1,6 +1,6 @@
 # Chapter 10: Application Objects
 
-**Previous:** [Chapter 9 — Event-Driven Programming](Chapter-9-Event-Driven-Programming.md)
+**Previous:** [Chapter 9 — Event-Driven Programming](Chapter-09-Event-Driven-Programming.md)
 
 ---
 

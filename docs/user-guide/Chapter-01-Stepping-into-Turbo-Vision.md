@@ -166,4 +166,4 @@ In the next step, you'll **customize menus and status lines** to make the interf
 
 ---
 
-**Next:** [Chapter 2 — Responding to Commands](Chapter-2-Responding-to-Commands.md)
+**Next:** [Chapter 2 — Responding to Commands](Chapter-02-Responding-to-Commands.md)

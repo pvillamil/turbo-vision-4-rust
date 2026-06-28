@@ -1,6 +1,6 @@
 # Chapter 8: Views and Groups
 
-**Previous:** [Chapter 7 — Architecture Overview](Chapter-7-Architecture-Overview.md)
+**Previous:** [Chapter 7 — Architecture Overview](Chapter-07-Architecture-Overview.md)
 
 ---
 
@@ -855,4 +855,4 @@ The next chapters will build on these concepts, showing you how to work with spe
 
 ---
 
-**Next:** [Chapter 9 — Event-Driven Programming](Chapter-9-Event-Driven-Programming.md)
+**Next:** [Chapter 9 — Event-Driven Programming](Chapter-09-Event-Driven-Programming.md)
