@@ -194,7 +194,7 @@ impl Application {
     /// Queries the actual terminal size, resizes internal buffers, and
     /// re-lays out the menu bar, status line, and desktop to match.
     pub fn handle_redraw(&mut self) {
-        if let Ok((w, h)) = Terminal::query_size() {
+        if let Ok((w, h)) = self.terminal.backend_size() {
             let (cur_w, cur_h) = self.terminal.size();
             if w != cur_w || h != cur_h {
                 self.terminal.resize(w as u16, h as u16);
@@ -255,6 +255,22 @@ impl Application {
         }
     }
 
+    /// Poll the terminal, treating a dead backend as a quit request.
+    ///
+    /// A `poll_event` error means the backend connection is gone (e.g. the
+    /// SSH client disconnected); swallowing it would leave the event loop
+    /// spinning forever on a dead session.
+    fn poll_event_or_quit(&mut self) -> Option<Event> {
+        match self.terminal.poll_event(Duration::from_millis(20)) {
+            Ok(event) => event,
+            Err(err) => {
+                log::warn!("terminal backend error, shutting down: {err}");
+                self.running = false;
+                None
+            }
+        }
+    }
+
     /// Get an event (with drawing)
     /// Matches Borland/Magiblot: TProgram::getEvent() (tprogram.cc:105-174)
     /// This is called by modal views' execute() methods.
@@ -272,12 +288,7 @@ impl Application {
 
         // Poll for event with 20ms timeout (matches magiblot's eventTimeoutMs)
         // This blocks until an event arrives or timeout occurs
-        match self
-            .terminal
-            .poll_event(Duration::from_millis(20))
-            .ok()
-            .flatten()
-        {
+        match self.poll_event_or_quit() {
             Some(event) => {
                 // Event received - return it immediately without calling idle()
                 // Matches magiblot: idle() is NOT called when events are present
@@ -324,12 +335,7 @@ impl Application {
             let _ = self.terminal.flush();
 
             // Poll for event with 20ms timeout (blocks until event or timeout)
-            match self
-                .terminal
-                .poll_event(Duration::from_millis(20))
-                .ok()
-                .flatten()
-            {
+            match self.poll_event_or_quit() {
                 Some(mut event) => {
                     // Event received - handle it immediately without calling idle()
                     self.handle_event(&mut event);
@@ -386,12 +392,7 @@ impl Application {
 
             // Poll for event with 20ms timeout (matches magiblot's eventTimeoutMs)
             // This blocks until an event arrives or timeout occurs
-            match self
-                .terminal
-                .poll_event(Duration::from_millis(20))
-                .ok()
-                .flatten()
-            {
+            match self.poll_event_or_quit() {
                 Some(mut event) => {
                     // Event received - handle it immediately without calling idle()
                     // Matches magiblot: idle() is NOT called when events are present
@@ -542,6 +543,27 @@ impl Application {
                 }
                 CM_SCREENSHOT => {
                     self.take_screenshot();
+                    event.clear();
+                }
+                crate::core::command::CM_SHOW_HISTORY => {
+                    // A History button was clicked in a dialog running under
+                    // exec_view()/run(); open the popup here where we have
+                    // terminal access, then broadcast the selection back.
+                    use crate::core::geometry::Point;
+                    use crate::core::history::HistoryManager;
+
+                    let history_id = event.info;
+                    let pos = Point::new((event.mouse.pos.x - 20).max(0), event.mouse.pos.y + 1);
+                    let mut window =
+                        crate::views::history_window::HistoryWindow::new(pos, history_id, 30);
+                    if let Some(selected) = window.execute(&mut self.terminal) {
+                        HistoryManager::add(history_id, selected);
+                        let mut sel = Event::broadcast_with_info(
+                            crate::core::command::CM_HISTORY_SELECTED,
+                            history_id,
+                        );
+                        self.desktop.handle_event(&mut sel);
+                    }
                     event.clear();
                 }
                 _ => {}

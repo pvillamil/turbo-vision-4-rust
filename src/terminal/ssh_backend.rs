@@ -177,20 +177,32 @@ impl Backend for SshBackend {
         Ok(*self.size.lock())
     }
 
-    fn poll_event(&mut self, _timeout: Duration) -> io::Result<Option<Event>> {
+    fn poll_event(&mut self, timeout: Duration) -> io::Result<Option<Event>> {
         // Return queued events first
         if let Some(ev) = self.event_queue.pop() {
             return Ok(Some(ev));
         }
 
-        // Try to receive from the channel (non-blocking)
-        match self.event_rx.try_recv() {
-            Ok(ev) => Ok(Some(ev)),
-            Err(mpsc::error::TryRecvError::Empty) => Ok(None),
-            Err(mpsc::error::TryRecvError::Disconnected) => Err(io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "SSH channel disconnected",
-            )),
+        // Wait up to `timeout` for an event. Sleeping between polls keeps a
+        // waiting session near-idle instead of spinning the event loop at
+        // 100% CPU per connection.
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            match self.event_rx.try_recv() {
+                Ok(ev) => return Ok(Some(ev)),
+                Err(mpsc::error::TryRecvError::Empty) => {
+                    if std::time::Instant::now() >= deadline {
+                        return Ok(None);
+                    }
+                    std::thread::sleep(Duration::from_millis(2));
+                }
+                Err(mpsc::error::TryRecvError::Disconnected) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "SSH channel disconnected",
+                    ));
+                }
+            }
         }
     }
 
@@ -323,14 +335,9 @@ impl SshSessionHandle {
     pub fn resize(&mut self, width: u16, height: u16) {
         *self.size.lock() = (width, height);
 
-        // Send resize event to the TUI
-        let event = Event::mouse(
-            crate::core::event::EventType::Nothing,
-            crate::core::geometry::Point::zero(),
-            0,
-            false,
-        );
-        // Note: turbo-vision handles resize through polling size(), not events
+        // Broadcast a redraw so the application re-queries the backend size
+        // and re-lays out (same path as a local terminal resize)
+        let event = Event::broadcast(crate::core::command::CM_REDRAW);
         let _ = self.event_tx.send(event);
     }
 

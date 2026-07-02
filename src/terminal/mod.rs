@@ -246,9 +246,21 @@ impl Terminal {
 
     /// Query actual terminal size from the system.
     ///
-    /// This is useful for detecting manual resizes.
+    /// This is useful for detecting manual resizes. Prefer
+    /// [`backend_size`](Self::backend_size) when a Terminal instance is
+    /// available: this static version always asks crossterm, which is wrong
+    /// for non-local backends (e.g. SSH sessions).
     pub fn query_size() -> io::Result<(i16, i16)> {
         let (width, height) = crossterm::terminal::size()?;
+        Ok((width as i16, height as i16))
+    }
+
+    /// Query the size reported by this terminal's backend.
+    ///
+    /// Unlike [`query_size`](Self::query_size), this respects the active
+    /// backend, so SSH sessions report their client's window size.
+    pub fn backend_size(&self) -> io::Result<(i16, i16)> {
+        let (width, height) = self.backend.size()?;
         Ok((width as i16, height as i16))
     }
 

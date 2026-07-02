@@ -20,6 +20,33 @@ use super::handler::TuiHandler;
 /// the backend to use for creating a Terminal.
 pub type AppFactory = Box<dyn Fn(Box<dyn crate::terminal::Backend>) + Send + Sync>;
 
+/// Password authentication callback: `(user, password)` returns accept.
+pub type PasswordAuthFn = Arc<dyn Fn(&str, &str) -> bool + Send + Sync>;
+
+/// Public key authentication callback: `(user, key)` returns accept.
+pub type PublicKeyAuthFn = Arc<dyn Fn(&str, &russh_keys::PublicKey) -> bool + Send + Sync>;
+
+/// Authentication policy shared with connection handlers.
+///
+/// With no callbacks set and `allow_anonymous` false (the default), every
+/// authentication attempt is rejected.
+#[derive(Clone, Default)]
+pub struct SshAuthPolicy {
+    pub(crate) password: Option<PasswordAuthFn>,
+    pub(crate) publickey: Option<PublicKeyAuthFn>,
+    pub(crate) allow_anonymous: bool,
+}
+
+impl std::fmt::Debug for SshAuthPolicy {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SshAuthPolicy")
+            .field("password", &self.password.is_some())
+            .field("publickey", &self.publickey.is_some())
+            .field("allow_anonymous", &self.allow_anonymous)
+            .finish()
+    }
+}
+
 /// Configuration for the SSH server.
 pub struct SshServerConfig {
     /// Address to bind the server to.
@@ -28,16 +55,49 @@ pub struct SshServerConfig {
     pub keys: Vec<PrivateKey>,
     /// Maximum number of concurrent connections.
     pub max_connections: Option<usize>,
+    /// Authentication policy (rejects everything by default).
+    pub(crate) auth: SshAuthPolicy,
 }
 
 impl SshServerConfig {
     /// Create a new server configuration with default values.
+    ///
+    /// Authentication rejects all attempts until an auth callback is set
+    /// via [`auth_password_fn`](Self::auth_password_fn) /
+    /// [`auth_publickey_fn`](Self::auth_publickey_fn), or
+    /// [`allow_anonymous`](Self::allow_anonymous) is enabled explicitly.
     pub fn new() -> Self {
         Self {
             bind_addr: "0.0.0.0:2222".to_string(),
             keys: Vec::new(),
             max_connections: None,
+            auth: SshAuthPolicy::default(),
         }
+    }
+
+    /// Set the password authentication callback.
+    pub fn auth_password_fn(
+        mut self,
+        f: impl Fn(&str, &str) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.auth.password = Some(Arc::new(f));
+        self
+    }
+
+    /// Set the public key authentication callback.
+    pub fn auth_publickey_fn(
+        mut self,
+        f: impl Fn(&str, &russh_keys::PublicKey) -> bool + Send + Sync + 'static,
+    ) -> Self {
+        self.auth.publickey = Some(Arc::new(f));
+        self
+    }
+
+    /// Accept every authentication attempt (demos and trusted networks only).
+    pub fn allow_anonymous(mut self) -> Self {
+        log::warn!("SSH server configured to accept ALL credentials (allow_anonymous)");
+        self.auth.allow_anonymous = true;
+        self
     }
 
     /// Set the bind address.
@@ -203,6 +263,7 @@ where
 
         let mut server = TuiServer {
             app_factory: self.app_factory,
+            auth: self.config.auth.clone(),
         };
 
         server.run_on_address(russh_config, addr).await?;
@@ -217,6 +278,7 @@ where
     F: Fn() -> Box<dyn FnOnce(Box<dyn crate::terminal::Backend>) + Send> + Send + Sync + 'static,
 {
     app_factory: Arc<F>,
+    auth: SshAuthPolicy,
 }
 
 impl<F> Server for TuiServer<F>
@@ -228,7 +290,7 @@ where
     fn new_client(&mut self, peer_addr: Option<SocketAddr>) -> Self::Handler {
         log::info!("New SSH connection from {:?}", peer_addr);
         let factory = (self.app_factory)();
-        TuiHandler::new(factory, peer_addr)
+        TuiHandler::new(factory, peer_addr, self.auth.clone())
     }
 }
 

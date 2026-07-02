@@ -67,6 +67,7 @@ where
     session: Option<TuiSession>,
     app_factory: Option<F>,
     peer_addr: Option<std::net::SocketAddr>,
+    auth: super::server::SshAuthPolicy,
 }
 
 impl<F> TuiHandler<F>
@@ -74,11 +75,16 @@ where
     F: FnOnce(Box<dyn crate::terminal::Backend>) + Send + 'static,
 {
     /// Create a new TUI handler.
-    pub fn new(app_factory: F, peer_addr: Option<std::net::SocketAddr>) -> Self {
+    pub fn new(
+        app_factory: F,
+        peer_addr: Option<std::net::SocketAddr>,
+        auth: super::server::SshAuthPolicy,
+    ) -> Self {
         Self {
             session: None,
             app_factory: Some(app_factory),
             peer_addr,
+            auth,
         }
     }
 
@@ -121,30 +127,50 @@ where
 
     /// Handle password authentication.
     ///
-    /// Override this in your implementation to add real authentication.
-    /// Default accepts all passwords (NOT SECURE - for demo only).
-    async fn auth_password(&mut self, user: &str, _password: &str) -> Result<Auth, Self::Error> {
+    /// Consults the server's [`SshAuthPolicy`]: the configured password
+    /// callback decides, `allow_anonymous` accepts, anything else is
+    /// rejected (deny by default).
+    async fn auth_password(&mut self, user: &str, password: &str) -> Result<Auth, Self::Error> {
         log::info!(
             "Password auth attempt from {:?} for user '{}'",
             self.peer_addr,
             user
         );
-        // WARNING: This accepts all passwords - implement real auth!
-        Ok(Auth::Accept)
+        let accepted = match &self.auth.password {
+            Some(check) => check(user, password),
+            None => self.auth.allow_anonymous,
+        };
+        if accepted {
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::Reject {
+                proceed_with_methods: None,
+            })
+        }
     }
 
     /// Handle public key authentication.
     ///
-    /// Override this in your implementation to add real authentication.
-    /// Default accepts all keys (NOT SECURE - for demo only).
-    async fn auth_publickey(&mut self, user: &str, _key: &PublicKey) -> Result<Auth, Self::Error> {
+    /// Consults the server's [`SshAuthPolicy`]: the configured public key
+    /// callback decides, `allow_anonymous` accepts, anything else is
+    /// rejected (deny by default).
+    async fn auth_publickey(&mut self, user: &str, key: &PublicKey) -> Result<Auth, Self::Error> {
         log::info!(
             "Pubkey auth attempt from {:?} for user '{}'",
             self.peer_addr,
             user
         );
-        // WARNING: This accepts all keys - implement real auth!
-        Ok(Auth::Accept)
+        let accepted = match &self.auth.publickey {
+            Some(check) => check(user, key),
+            None => self.auth.allow_anonymous,
+        };
+        if accepted {
+            Ok(Auth::Accept)
+        } else {
+            Ok(Auth::Reject {
+                proceed_with_methods: None,
+            })
+        }
     }
 
     /// Handle channel open request.

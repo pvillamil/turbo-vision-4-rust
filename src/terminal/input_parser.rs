@@ -48,6 +48,11 @@ pub struct InputParser {
     buffer: Vec<u8>,
 }
 
+/// Longest escape sequence the parser will buffer while waiting for more
+/// bytes. A malformed sequence with no final byte would otherwise grow the
+/// buffer without bound on hostile input (e.g. from a remote SSH client).
+const MAX_PENDING_SEQUENCE: usize = 64;
+
 impl InputParser {
     /// Create a new input parser.
     pub fn new() -> Self {
@@ -70,7 +75,16 @@ impl InputParser {
                     events.push(event);
                     self.buffer.drain(..consumed);
                 }
-                None => break, // Need more data
+                None => {
+                    // Incomplete sequence: wait for more data — unless it has
+                    // already exceeded any legitimate sequence length, in
+                    // which case drop the leading byte to resynchronize
+                    if self.buffer.len() > MAX_PENDING_SEQUENCE {
+                        self.buffer.remove(0);
+                        continue;
+                    }
+                    break;
+                }
             }
         }
         events
@@ -144,7 +158,13 @@ impl InputParser {
         if buf[2] == b'<' {
             return self.parse_mouse_sgr();
         }
-        if buf[2] == b'M' && buf.len() >= 6 {
+        if buf[2] == b'M' {
+            // X10 mouse: ESC [ M b x y (6 bytes). A partial sequence must
+            // wait for the rest — falling through would treat 'M' as a CSI
+            // final byte and desynchronize the stream
+            if buf.len() < 6 {
+                return None;
+            }
             return self.parse_mouse_normal();
         }
 
@@ -499,5 +519,29 @@ mod tests {
         let events = parser.parse(b"A");
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].key_code, KB_UP);
+    }
+
+    #[test]
+    fn partial_x10_mouse_waits_for_full_sequence() {
+        let mut parser = InputParser::new();
+        // First 4 bytes of a 6-byte X10 mouse sequence
+        let events = parser.parse(b"\x1b[M\x20");
+        assert_eq!(events.len(), 0);
+        // Completing it produces exactly one mouse event, no desync
+        let events = parser.parse(b"\x21\x21");
+        assert_eq!(events.len(), 1);
+    }
+
+    #[test]
+    fn unterminated_csi_does_not_grow_buffer_forever() {
+        let mut parser = InputParser::new();
+        // CSI with parameter bytes but never a final byte
+        let mut junk = vec![0x1b, b'['];
+        junk.extend(std::iter::repeat(b';').take(500));
+        let _ = parser.parse(&junk);
+        assert!(parser.buffer.len() <= 65);
+        // Parser recovers: a normal key still comes through
+        let events = parser.parse(b"a");
+        assert!(events.iter().any(|e| e.key_code == 'a' as u16));
     }
 }

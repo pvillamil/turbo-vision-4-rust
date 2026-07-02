@@ -57,4 +57,6 @@ mod handler;
 mod server;
 
 pub use handler::{TuiHandler, TuiSession};
-pub use server::{AppFactory, SshServer, SshServerConfig};
+pub use server::{
+    AppFactory, PasswordAuthFn, PublicKeyAuthFn, SshAuthPolicy, SshServer, SshServerConfig,
+};

@@ -123,7 +123,10 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
 
     let config = SshServerConfig::new()
         .bind_addr("0.0.0.0:2222")
-        .load_or_generate_key("ssh_host_key");
+        .load_or_generate_key("ssh_host_key")
+        // Demo only: accept every credential. Real deployments should use
+        // .auth_password_fn(...) / .auth_publickey_fn(...) instead.
+        .allow_anonymous();
 
     println!("=== SSH TUI Server ===");
     println!();
