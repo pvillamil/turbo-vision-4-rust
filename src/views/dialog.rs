@@ -306,13 +306,22 @@ impl View for Dialog {
                     return;
                 }
 
-                // Enter key activates default button (if exists and enabled)
-                // Matches Borland: cmDefault broadcast (tdialog.cc:66-70)
+                // Enter key activates the *current* default button.
+                // Matches Borland: cmDefault broadcast (tdialog.cc:66-70) where a
+                // focused button has grabbed the default role (cmGrabDefault).
+                //
+                // If the focused child is a button it consumes Enter itself
+                // (converting it to its own command in the Group's focused
+                // phase), so this branch is only reached when the focused view
+                // did not handle Enter. Guard anyway: never fire the flagged
+                // default while a different button is focused.
                 if event.key_code == KB_ENTER {
-                    if let Some(default_command) = self.find_default_button_command() {
-                        *event = Event::command(default_command);
-                        // Re-process as command (will be handled below)
-                        self.handle_event(event);
+                    if !self.focused_child_is_button() {
+                        if let Some(default_command) = self.find_default_button_command() {
+                            *event = Event::command(default_command);
+                            // Re-process as command (will be handled below)
+                            self.handle_event(event);
+                        }
                     }
                     return;
                 }
@@ -455,6 +464,18 @@ impl View for Dialog {
 }
 
 impl Dialog {
+    /// Returns true if the currently focused child view is a button.
+    ///
+    /// Used by the Enter handling to avoid firing the statically flagged
+    /// default button while a different button owns the focus (Borland's
+    /// cmGrabDefault semantics: the focused button *is* the current default).
+    fn focused_child_is_button(&mut self) -> bool {
+        self.window
+            .interior_mut()
+            .focused_child()
+            .is_some_and(|child| child.is_focused() && child.button_command().is_some())
+    }
+
     /// Find the default button and return its command if it's enabled
     /// Returns None if no default button found or if it's disabled
     /// Matches Borland's TButton::handleEvent() cmDefault broadcast handling (tbutton.cc lines 238-244)
@@ -820,6 +841,79 @@ mod tests {
         assert_eq!(dialog.get_end_state(), 0, "must not close the dialog");
         assert_eq!(event.what, EventType::Command, "event left for modal loop");
         assert_eq!(event.command, CM_SHOW_HISTORY);
+    }
+
+    /// Enter must press the *focused* button, not the statically flagged
+    /// default (Borland cmGrabDefault semantics).
+    #[test]
+    fn test_enter_fires_focused_button_not_flagged_default() {
+        use crate::core::command::{CM_NO, CM_OK};
+        use crate::core::command_set;
+        use crate::core::event::KB_ENTER;
+        use crate::views::button::Button;
+
+        command_set::enable_command(CM_OK);
+        command_set::enable_command(CM_NO);
+
+        let mut dialog = Dialog::new(Rect::new(0, 0, 40, 10), "Test");
+        let state = dialog.state();
+        dialog.set_state(state | SF_MODAL);
+
+        dialog.add(Box::new(Button::new(
+            Rect::new(2, 2, 12, 4),
+            "OK",
+            CM_OK,
+            true, // flagged default
+        )));
+        dialog.add(Box::new(Button::new(
+            Rect::new(14, 2, 24, 4),
+            "No",
+            CM_NO,
+            false,
+        )));
+        dialog.set_focus_to_child(1); // focus the non-default button
+
+        let mut event = Event::keyboard(KB_ENTER);
+        dialog.handle_event(&mut event);
+
+        assert_eq!(
+            dialog.get_end_state(),
+            CM_NO,
+            "Enter must fire the focused button's command, not the flagged default"
+        );
+    }
+
+    /// Enter with a non-button focused falls back to the flagged default button.
+    #[test]
+    fn test_enter_on_non_button_fires_default_button() {
+        use crate::core::command::CM_OK;
+        use crate::core::command_set;
+        use crate::core::event::KB_ENTER;
+        use crate::views::button::Button;
+        use crate::views::static_text::StaticText;
+
+        command_set::enable_command(CM_OK);
+
+        let mut dialog = Dialog::new(Rect::new(0, 0, 40, 10), "Test");
+        let state = dialog.state();
+        dialog.set_state(state | SF_MODAL);
+
+        dialog.add(Box::new(StaticText::new(Rect::new(2, 2, 20, 3), "Hello")));
+        dialog.add(Box::new(Button::new(
+            Rect::new(2, 4, 12, 6),
+            "OK",
+            CM_OK,
+            true,
+        )));
+
+        let mut event = Event::keyboard(KB_ENTER);
+        dialog.handle_event(&mut event);
+
+        assert_eq!(
+            dialog.get_end_state(),
+            CM_OK,
+            "Enter with a non-button focused must fire the default button"
+        );
     }
 
     #[test]

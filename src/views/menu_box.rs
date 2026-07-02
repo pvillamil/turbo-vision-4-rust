@@ -14,6 +14,7 @@
 use super::menu_viewer::{MenuViewer, MenuViewerState};
 use super::view::{View, write_line_to_terminal};
 use crate::core::command::CommandId;
+use crate::core::command_set;
 use crate::core::draw::DrawBuffer;
 use crate::core::event::{Event, EventType, KB_ENTER, KB_ESC, KB_ESC_ESC, MB_LEFT_BUTTON};
 use crate::core::geometry::{Point, Rect};
@@ -191,18 +192,21 @@ impl View for MenuBox {
                     text,
                     enabled,
                     shortcut,
+                    command,
                     ..
                 } => {
-                    let color = if is_selected {
-                        if *enabled {
-                            selected_attr
-                        } else {
-                            selected_attr // Disabled but selected
-                        }
-                    } else if *enabled {
-                        normal_attr
-                    } else {
+                    // Disabled = MenuItem flag off OR command disabled globally
+                    let is_enabled = *enabled && command_set::command_enabled(*command);
+                    // Disabled items stay dim even when selected, so the user
+                    // can see the item cannot be executed. Matches Borland's
+                    // distinct selected-disabled color (TMenuView::draw);
+                    // menu_bar.rs draws disabled items the same way.
+                    let color = if !is_enabled {
                         disabled_attr
+                    } else if is_selected {
+                        selected_attr
+                    } else {
+                        normal_attr
                     };
 
                     // Left border
@@ -331,7 +335,9 @@ impl View for MenuBox {
                                     command,
                                     enabled: true,
                                     ..
-                                } => {
+                                    // Also require the command to be enabled in the
+                                    // global command set (matches menu_bar.rs).
+                                } if command_set::command_enabled(*command) => {
                                     *event = Event::command(*command);
                                 }
                                 _ => {
@@ -395,8 +401,12 @@ impl View for MenuBox {
                             ..
                         } = item
                         {
-                            *event = Event::command(*command);
-                            return;
+                            // Also require the command to be enabled in the
+                            // global command set (matches menu_bar.rs).
+                            if command_set::command_enabled(*command) {
+                                *event = Event::command(*command);
+                                return;
+                            }
                         }
                     }
                 }
@@ -496,6 +506,62 @@ mod tests {
 
         let rect1 = menubox.get_item_rect(1);
         assert_eq!(rect1.a.y, 7); // Position 5 + 2 (border + item)
+    }
+
+    #[test]
+    fn test_menubox_enter_ignores_globally_disabled_command() {
+        // Item enabled at the MenuItem level, but the command is disabled in
+        // the global command set - Enter must not execute it.
+        const TEST_CMD: CommandId = 530;
+        command_set::disable_command(TEST_CMD);
+
+        let menu = MenuBuilder::new().item("~T~est", TEST_CMD, 0).build();
+        let mut menubox = MenuBox::new(Point::new(0, 0), menu);
+
+        let mut event = Event::keyboard(KB_ENTER);
+        menubox.handle_event(&mut event);
+
+        assert_ne!(
+            event.what,
+            EventType::Command,
+            "globally disabled menu command must not execute"
+        );
+    }
+
+    #[test]
+    fn test_menubox_mouse_up_ignores_globally_disabled_command() {
+        const TEST_CMD: CommandId = 531;
+        command_set::disable_command(TEST_CMD);
+
+        let menu = MenuBuilder::new().item("~T~est", TEST_CMD, 0).build();
+        let mut menubox = MenuBox::new(Point::new(0, 0), menu);
+
+        let item_pos = menubox.get_item_rect(0).a;
+        let mut down = Event::mouse(EventType::MouseDown, item_pos, MB_LEFT_BUTTON, false);
+        menubox.handle_event(&mut down);
+        let mut up = Event::mouse(EventType::MouseUp, item_pos, MB_LEFT_BUTTON, false);
+        menubox.handle_event(&mut up);
+
+        assert_ne!(
+            up.what,
+            EventType::Command,
+            "globally disabled menu command must not execute on click"
+        );
+    }
+
+    #[test]
+    fn test_menubox_enter_executes_enabled_command() {
+        const TEST_CMD: CommandId = 532;
+        command_set::enable_command(TEST_CMD);
+
+        let menu = MenuBuilder::new().item("~T~est", TEST_CMD, 0).build();
+        let mut menubox = MenuBox::new(Point::new(0, 0), menu);
+
+        let mut event = Event::keyboard(KB_ENTER);
+        menubox.handle_event(&mut event);
+
+        assert_eq!(event.what, EventType::Command);
+        assert_eq!(event.command, TEST_CMD);
     }
 
     #[test]

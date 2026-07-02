@@ -225,7 +225,10 @@ impl View for StatusLine {
                 if let Some(idx) = selected_item {
                     if idx < self.items.len() {
                         let item = &self.items[idx];
-                        if item.command != 0 {
+                        // Only act on enabled commands - disabled items are drawn
+                        // greyed out and must not fire. Matches Borland:
+                        // TStatusLine::handleEvent() checks commandEnabled().
+                        if item.command != 0 && command_set::command_enabled(item.command) {
                             *event = Event::command(item.command);
                         }
                     }
@@ -256,8 +259,13 @@ impl View for StatusLine {
         if event.what == EventType::Keyboard {
             for item in &self.items {
                 if event.key_code == item.key_code {
-                    *event = Event::command(item.command);
-                    return;
+                    // Disabled commands don't fire; the event passes through
+                    // unhandled. Matches Borland: TStatusLine::handleEvent()
+                    // only converts the key when commandEnabled(command).
+                    if command_set::command_enabled(item.command) {
+                        *event = Event::command(item.command);
+                        return;
+                    }
                 }
             }
         }
@@ -282,5 +290,94 @@ impl View for StatusLine {
     fn get_palette(&self) -> Option<crate::core::palette::Palette> {
         use crate::core::palette::{Palette, palettes};
         Some(Palette::from_slice(palettes::CP_STATUSLINE))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::geometry::Point;
+    use crate::views::view::View;
+
+    const TEST_KEY: KeyCode = 0x1234;
+
+    fn make_status_line(command: CommandId) -> StatusLine {
+        StatusLine::new(
+            Rect::new(0, 0, 80, 1),
+            vec![StatusItem::new("~F9~ Test", TEST_KEY, command)],
+        )
+    }
+
+    #[test]
+    fn test_disabled_status_key_passes_through_unhandled() {
+        const TEST_CMD: CommandId = 520;
+        command_set::disable_command(TEST_CMD);
+
+        let mut status = make_status_line(TEST_CMD);
+        let mut event = Event::keyboard(TEST_KEY);
+        status.handle_event(&mut event);
+
+        assert_eq!(
+            event.what,
+            EventType::Keyboard,
+            "disabled shortcut must pass through unhandled"
+        );
+    }
+
+    #[test]
+    fn test_enabled_status_key_fires_command() {
+        const TEST_CMD: CommandId = 521;
+        command_set::enable_command(TEST_CMD);
+
+        let mut status = make_status_line(TEST_CMD);
+        let mut event = Event::keyboard(TEST_KEY);
+        status.handle_event(&mut event);
+
+        assert_eq!(event.what, EventType::Command);
+        assert_eq!(event.command, TEST_CMD);
+    }
+
+    #[test]
+    fn test_disabled_status_item_click_does_not_fire() {
+        const TEST_CMD: CommandId = 522;
+        command_set::disable_command(TEST_CMD);
+
+        let mut status = make_status_line(TEST_CMD);
+        // Simulate the hit area normally computed during draw()
+        status.item_positions.push((0, 9));
+
+        let mut event = Event::mouse(
+            EventType::MouseDown,
+            Point::new(3, 0),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        status.handle_event(&mut event);
+
+        assert_ne!(
+            event.what,
+            EventType::Command,
+            "clicking a disabled status item must not fire its command"
+        );
+    }
+
+    #[test]
+    fn test_enabled_status_item_click_fires() {
+        const TEST_CMD: CommandId = 523;
+        command_set::enable_command(TEST_CMD);
+
+        let mut status = make_status_line(TEST_CMD);
+        status.item_positions.push((0, 9));
+
+        let mut event = Event::mouse(
+            EventType::MouseDown,
+            Point::new(3, 0),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        status.handle_event(&mut event);
+
+        assert_eq!(event.what, EventType::Command);
+        assert_eq!(event.command, TEST_CMD);
     }
 }

@@ -18,6 +18,14 @@ pub struct Button {
     title: String,
     command: CommandId,
     is_default: bool,
+    /// Whether this button is currently the *acting* default.
+    ///
+    /// Matches Borland's `amDefault` (tbutton.cc): a focused button grabs the
+    /// default role (cmGrabDefault); when it loses focus the role reverts to
+    /// the statically flagged default button (cmReleaseDefault).
+    am_default: bool,
+    /// Whether a MouseDown was armed inside this button (fires on MouseUp).
+    pressed: bool,
     is_broadcast: bool,
     state: StateFlags,
     options: u16,
@@ -41,6 +49,8 @@ impl Button {
             title: title.to_string(),
             command,
             is_default,
+            am_default: is_default,
+            pressed: false,
             is_broadcast: false,
             state,
             options: OF_POST_PROCESS, // Buttons process in post-process phase
@@ -87,6 +97,16 @@ impl Button {
         }
         None
     }
+
+    /// Returns true if the mouse position is inside the clickable button area.
+    ///
+    /// Excludes the shadow row/column at the bottom/right of the bounds.
+    fn mouse_in_button(&self, pos: crate::core::geometry::Point) -> bool {
+        pos.x >= self.bounds.a.x
+            && pos.x < self.bounds.b.x
+            && pos.y >= self.bounds.a.y
+            && pos.y < self.bounds.b.y - 1
+    }
 }
 
 impl View for Button {
@@ -123,8 +143,8 @@ impl View for Button {
             self.map_color(BUTTON_DISABLED) // Disabled
         } else if is_focused {
             self.map_color(BUTTON_SELECTED) // Selected/focused
-        } else if self.is_default {
-            self.map_color(BUTTON_DEFAULT) // Default but not focused
+        } else if self.am_default {
+            self.map_color(BUTTON_DEFAULT) // Acting default but not focused
         } else {
             self.map_color(BUTTON_NORMAL) // Normal
         };
@@ -198,8 +218,21 @@ impl View for Button {
         // This is critical: disabled buttons MUST receive CM_COMMAND_SET_CHANGED broadcasts
         // so they can become enabled when their command becomes enabled in the global command set.
         if event.what == EventType::Broadcast {
-            use crate::core::command::CM_COMMAND_SET_CHANGED;
+            use crate::core::command::{
+                CM_COMMAND_SET_CHANGED, CM_GRAB_DEFAULT, CM_RELEASE_DEFAULT,
+            };
             use crate::core::command_set;
+
+            // Default-role handoff (Borland: tbutton.cc cmGrabDefault/cmReleaseDefault):
+            // another button grabbed the default role, or asked us to give it back.
+            if event.command == CM_GRAB_DEFAULT {
+                // A focused button grabbed the default role; only the focused
+                // button keeps it.
+                self.am_default = self.is_focused();
+            } else if event.command == CM_RELEASE_DEFAULT {
+                // Role reverts to the statically flagged default button.
+                self.am_default = self.is_default;
+            }
 
             if event.command == CM_COMMAND_SET_CHANGED {
                 // Query global command set (thread-local static, like Borland)
@@ -262,21 +295,31 @@ impl View for Button {
                 }
             }
             EventType::MouseDown => {
-                // Check if click is within button bounds
-                let mouse_pos = event.mouse.pos;
+                // Arm the button on press; the command fires on MouseUp inside
+                // the button. Matches Borland: TButton tracks the mouse and only
+                // presses when the button is released inside (tbutton.cc), which
+                // lets the user cancel by dragging off before releasing.
                 if event.mouse.buttons & MB_LEFT_BUTTON != 0
-                    && mouse_pos.x >= self.bounds.a.x
-                    && mouse_pos.x < self.bounds.b.x
-                    && mouse_pos.y >= self.bounds.a.y
-                    && mouse_pos.y < self.bounds.b.y - 1
-                // Exclude shadow line
+                    && self.mouse_in_button(event.mouse.pos)
                 {
-                    // Button clicked - generate command or broadcast
-                    if self.is_broadcast {
-                        *event = Event::broadcast(self.command);
-                    } else {
-                        *event = Event::command(self.command);
+                    self.pressed = true;
+                    event.clear();
+                }
+            }
+            EventType::MouseUp => {
+                if self.mouse_in_button(event.mouse.pos) {
+                    if self.pressed {
+                        // Released inside while armed - fire command or broadcast
+                        self.pressed = false;
+                        if self.is_broadcast {
+                            *event = Event::broadcast(self.command);
+                        } else {
+                            *event = Event::command(self.command);
+                        }
                     }
+                } else {
+                    // Released outside - cancel the press without firing
+                    self.pressed = false;
                 }
             }
             _ => {}
@@ -287,8 +330,22 @@ impl View for Button {
         !self.is_disabled()
     }
 
-    // set_focus() now uses default implementation from View trait
-    // which sets/clears SF_FOCUSED flag
+    fn set_focus(&mut self, focused: bool) {
+        // Default View behavior: set/clear SF_FOCUSED
+        use crate::core::state::SF_FOCUSED;
+        self.set_state_flag(SF_FOCUSED, focused);
+
+        // Default-role handoff (Borland: TButton::setState() sends
+        // cmGrabDefault on focus gain and cmReleaseDefault on focus loss).
+        // A focused button becomes the acting default; when it loses focus,
+        // the role reverts to the statically flagged default button.
+        self.am_default = if focused { true } else { self.is_default };
+
+        // Losing focus also cancels any armed (but unreleased) mouse press.
+        if !focused {
+            self.pressed = false;
+        }
+    }
 
     fn state(&self) -> StateFlags {
         self.state
@@ -637,6 +694,84 @@ mod tests {
             .bounds(Rect::new(0, 0, 10, 2))
             .title("Test")
             .build();
+    }
+
+    #[test]
+    fn test_button_fires_on_mouse_up_inside() {
+        // Press-on-release: MouseDown only arms the button, MouseUp inside fires
+        const TEST_CMD: u16 = 512;
+        command_set::enable_command(TEST_CMD);
+
+        let mut button = Button::new(Rect::new(0, 0, 10, 3), "Test", TEST_CMD, false);
+
+        let mut down = Event::mouse(
+            EventType::MouseDown,
+            Point::new(5, 1),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        button.handle_event(&mut down);
+        assert_eq!(
+            down.what,
+            EventType::Nothing,
+            "MouseDown must arm the button, not fire the command"
+        );
+
+        let mut up = Event::mouse(EventType::MouseUp, Point::new(5, 1), MB_LEFT_BUTTON, false);
+        button.handle_event(&mut up);
+        assert_eq!(up.what, EventType::Command, "MouseUp inside must fire");
+        assert_eq!(up.command, TEST_CMD);
+    }
+
+    #[test]
+    fn test_button_press_cancelled_by_release_outside() {
+        // Dragging off the button before releasing cancels the press
+        const TEST_CMD: u16 = 513;
+        command_set::enable_command(TEST_CMD);
+
+        let mut button = Button::new(Rect::new(0, 0, 10, 3), "Test", TEST_CMD, false);
+
+        let mut down = Event::mouse(
+            EventType::MouseDown,
+            Point::new(5, 1),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        button.handle_event(&mut down);
+
+        // Release outside the button - cancels, no command
+        let mut up = Event::mouse(EventType::MouseUp, Point::new(20, 5), MB_LEFT_BUTTON, false);
+        button.handle_event(&mut up);
+        assert_ne!(up.what, EventType::Command, "release outside must not fire");
+
+        // A later MouseUp inside without a fresh press must not fire either
+        let mut up2 = Event::mouse(EventType::MouseUp, Point::new(5, 1), MB_LEFT_BUTTON, false);
+        button.handle_event(&mut up2);
+        assert_ne!(
+            up2.what,
+            EventType::Command,
+            "MouseUp without an armed press must not fire"
+        );
+    }
+
+    #[test]
+    fn test_button_grabs_default_on_focus_and_releases_on_blur() {
+        // Focused button becomes the acting default; on blur the role reverts
+        const TEST_CMD: u16 = 514;
+        command_set::enable_command(TEST_CMD);
+
+        let mut plain = Button::new(Rect::new(0, 0, 10, 3), "Plain", TEST_CMD, false);
+        assert!(!plain.am_default, "non-default button starts without role");
+        plain.set_focus(true);
+        assert!(plain.am_default, "focused button grabs the default role");
+        plain.set_focus(false);
+        assert!(!plain.am_default, "blur releases the grabbed role");
+
+        let mut default = Button::new(Rect::new(0, 0, 10, 3), "Def", TEST_CMD, true);
+        assert!(default.am_default, "flagged default starts with the role");
+        default.set_focus(true);
+        default.set_focus(false);
+        assert!(default.am_default, "flagged default keeps role after blur");
     }
 
     #[test]

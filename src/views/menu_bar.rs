@@ -192,26 +192,8 @@ impl MenuBar {
             let dropdown_x = self.menu_positions.get(menu_idx).copied().unwrap_or(0);
             let item_y = self.bounds.a.y + 2 + current_idx as i16; // +1 for bar, +1 for top border
 
-            // Calculate dropdown width (similar to draw_dropdown logic)
-            let parent_menu = &self.submenus[menu_idx].menu;
-            let mut max_text_width = 10;
-            for item in &parent_menu.items {
-                match item {
-                    MenuItem::Regular { text, shortcut, .. } => {
-                        let text_len = text.replace('~', "").len();
-                        max_text_width = max_text_width.max(text_len);
-                        if let Some(s) = shortcut {
-                            max_text_width = max_text_width.max(text_len + s.len() + 2);
-                        }
-                    }
-                    MenuItem::SubMenu { text, .. } => {
-                        let text_len = text.replace('~', "").len();
-                        max_text_width = max_text_width.max(text_len + 3);
-                    }
-                    MenuItem::Separator => {}
-                }
-            }
-            let dropdown_width = max_text_width + 4;
+            // Calculate dropdown width (same math as draw_dropdown)
+            let dropdown_width = Self::dropdown_width(&self.submenus[menu_idx].menu);
 
             let submenu_x = dropdown_x + dropdown_width as i16 - 1;
             let position = Point::new(submenu_x, item_y);
@@ -226,22 +208,12 @@ impl MenuBar {
         None
     }
 
-    /// Draw the dropdown menu
-    fn draw_dropdown(&self, terminal: &mut Terminal, menu_idx: usize) {
-        if menu_idx >= self.submenus.len() || menu_idx >= self.menu_positions.len() {
-            return;
-        }
-
-        let menu_x = self.menu_positions[menu_idx];
-        let menu_y = self.bounds.a.y + 1;
-        let menu = &self.submenus[menu_idx].menu;
-
-        let normal_attr = self.map_color(MENU_NORMAL);
-        let selected_attr = self.map_color(MENU_SELECTED);
-        let disabled_attr = self.map_color(MENU_DISABLED);
-        let shortcut_attr = self.map_color(MENU_SHORTCUT);
-
-        // Calculate dropdown width
+    /// Compute the rendered width of a dropdown for the given menu.
+    ///
+    /// Single source of truth for the dropdown geometry: `draw_dropdown()`,
+    /// mouse hit-testing and `get_item_rect()` all use this so the clickable
+    /// area always matches what is drawn on screen.
+    fn dropdown_width(menu: &Menu) -> usize {
         let mut max_text_width = 12;
         let mut max_shortcut_width = 0;
         for item in &menu.items {
@@ -261,11 +233,30 @@ impl MenuBar {
             }
         }
 
-        let dropdown_width = if max_shortcut_width > 0 {
+        if max_shortcut_width > 0 {
             max_text_width + 2 + max_shortcut_width + 2
         } else {
             max_text_width + 2
-        };
+        }
+    }
+
+    /// Draw the dropdown menu
+    fn draw_dropdown(&self, terminal: &mut Terminal, menu_idx: usize) {
+        if menu_idx >= self.submenus.len() || menu_idx >= self.menu_positions.len() {
+            return;
+        }
+
+        let menu_x = self.menu_positions[menu_idx];
+        let menu_y = self.bounds.a.y + 1;
+        let menu = &self.submenus[menu_idx].menu;
+
+        let normal_attr = self.map_color(MENU_NORMAL);
+        let selected_attr = self.map_color(MENU_SELECTED);
+        let disabled_attr = self.map_color(MENU_DISABLED);
+        let shortcut_attr = self.map_color(MENU_SHORTCUT);
+
+        // Calculate dropdown width (shared with hit-testing)
+        let dropdown_width = Self::dropdown_width(menu);
         let dropdown_height = menu.items.len() as i16;
 
         // Draw top border
@@ -524,7 +515,7 @@ impl View for MenuBar {
                             let bounds = Rect::new(
                                 menu_x,
                                 menu_y,
-                                menu_x + 20, // Approximate width
+                                menu_x + Self::dropdown_width(menu) as i16,
                                 menu_y + 1 + item_count as i16 + 1,
                             );
                             (Some(bounds), item_count)
@@ -571,7 +562,7 @@ impl View for MenuBar {
                             let bounds = Rect::new(
                                 menu_x,
                                 menu_y,
-                                menu_x + 20,
+                                menu_x + Self::dropdown_width(menu) as i16,
                                 menu_y + 1 + item_count as i16 + 1,
                             );
                             (Some(bounds), item_count)
@@ -791,15 +782,61 @@ impl MenuViewer for MenuBar {
             if menu_idx < self.menu_positions.len() {
                 let menu_x = self.menu_positions[menu_idx];
                 let menu_y = self.bounds.a.y + 1;
+                let width = Self::dropdown_width(&self.submenus[menu_idx].menu) as i16;
                 // Items start at menu_y + 1 (after top border), each is 1 row
                 return crate::core::geometry::Rect::new(
                     menu_x,
                     menu_y + 1 + item_index as i16,
-                    menu_x + 20, // Approximate width
+                    menu_x + width,
                     menu_y + 2 + item_index as i16,
                 );
             }
         }
         crate::core::geometry::Rect::new(0, 0, 0, 0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::menu_data::MenuBuilder;
+
+    fn make_menu_bar() -> MenuBar {
+        let menu = MenuBuilder::new()
+            .item_with_shortcut("~O~pen a very long item name", 100, 0, "Ctrl+O")
+            .item("~S~ave", 101, 0)
+            .build();
+        let mut bar = MenuBar::new(Rect::new(0, 0, 80, 1));
+        bar.add_submenu(SubMenu::new("~F~ile", menu));
+        bar
+    }
+
+    #[test]
+    fn test_dropdown_width_matches_draw_math() {
+        let bar = make_menu_bar();
+        let menu = &bar.submenus[0].menu;
+
+        // "Open a very long item name" = 26 chars, shortcut "Ctrl+O" = 6
+        // width = max_text + 2 + max_shortcut + 2 = 26 + 2 + 6 + 2
+        assert_eq!(MenuBar::dropdown_width(menu), 26 + 2 + 6 + 2);
+    }
+
+    #[test]
+    fn test_get_item_rect_uses_real_dropdown_width() {
+        let mut bar = make_menu_bar();
+        bar.open_menu(0);
+
+        let width = MenuBar::dropdown_width(&bar.submenus[0].menu) as i16;
+        let rect = bar.get_item_rect(0);
+
+        assert_eq!(
+            rect.b.x - rect.a.x,
+            width,
+            "hit-test rect must span the drawn dropdown width, not a hardcoded 20"
+        );
+        assert!(
+            rect.b.x - rect.a.x > 20,
+            "this menu is wider than the old hardcoded width"
+        );
     }
 }
