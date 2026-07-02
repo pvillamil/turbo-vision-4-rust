@@ -15,6 +15,8 @@ use crate::core::geometry::Rect;
 use crate::core::palette::Attr;
 use crate::core::state::StateFlags;
 use crate::terminal::Terminal;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 const COLORS_PER_ROW: usize = 8;
 
@@ -23,8 +25,9 @@ const COLORS_PER_ROW: usize = 8;
 pub struct ColorSelector {
     bounds: Rect,
     state: StateFlags,
-    /// Currently selected color (0-15)
-    selected_color: u8,
+    /// Currently selected color (0-15), shared so owners (e.g. ColorDialog)
+    /// can read the selection back after the selector is boxed into a group
+    selected_color: Rc<RefCell<u8>>,
     /// Whether selecting foreground (true) or background (false)
     _selecting_foreground: bool,
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
@@ -33,10 +36,15 @@ pub struct ColorSelector {
 impl ColorSelector {
     /// Create a new color selector
     pub fn new(bounds: Rect) -> Self {
+        Self::with_shared(bounds, Rc::new(RefCell::new(7))) // White
+    }
+
+    /// Create a color selector whose selection is shared with the caller
+    pub fn with_shared(bounds: Rect, selected: Rc<RefCell<u8>>) -> Self {
         Self {
             bounds,
             state: 0,
-            selected_color: 7, // White
+            selected_color: selected,
             _selecting_foreground: true,
             palette_chain: None,
         }
@@ -44,12 +52,12 @@ impl ColorSelector {
 
     /// Get the selected color
     pub fn get_selected_color(&self) -> u8 {
-        self.selected_color
+        *self.selected_color.borrow()
     }
 
     /// Set the selected color
     pub fn set_selected_color(&mut self, color: u8) {
-        self.selected_color = color.min(15);
+        *self.selected_color.borrow_mut() = color.min(15);
     }
 
     /// Get position of color in grid
@@ -92,7 +100,7 @@ impl View for ColorSelector {
 
             for col in 0..COLORS_PER_ROW {
                 let color_idx = (row * COLORS_PER_ROW + col) as u8;
-                let is_selected = color_idx == self.selected_color;
+                let is_selected = color_idx == self.get_selected_color();
 
                 // Create color attribute for display
                 let attr = Attr::from_u8((color_idx << 4) | color_idx);
@@ -123,7 +131,8 @@ impl View for ColorSelector {
             let label_attr = Attr::from_u8(0x07); // Normal text
             let text = format!(
                 "Selected: {} (0x{:02X})",
-                self.selected_color, self.selected_color
+                self.get_selected_color(),
+                self.get_selected_color()
             );
             label_buf.move_str(0, &text, label_attr);
             write_line_to_terminal(terminal, self.bounds.a.x, self.bounds.a.y + 2, &label_buf);
@@ -133,7 +142,7 @@ impl View for ColorSelector {
     fn handle_event(&mut self, event: &mut Event) {
         match event.what {
             EventType::Keyboard => {
-                let (col, row) = self.color_to_pos(self.selected_color);
+                let (col, row) = self.color_to_pos(self.get_selected_color());
                 let mut new_col = col;
                 let mut new_row = row;
 
@@ -151,7 +160,7 @@ impl View for ColorSelector {
                 }
 
                 if let Some(new_color) = self.pos_to_color(new_col, new_row) {
-                    self.selected_color = new_color;
+                    self.set_selected_color(new_color);
                     event.clear();
                 }
             }
@@ -163,7 +172,7 @@ impl View for ColorSelector {
                         let rel_y = mouse_pos.y - self.bounds.a.y;
 
                         if let Some(color) = self.pos_to_color(rel_x, rel_y) {
-                            self.selected_color = color;
+                            self.set_selected_color(color);
                             event.clear();
                         }
                     }

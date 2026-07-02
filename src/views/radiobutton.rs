@@ -87,6 +87,20 @@ impl View for RadioButton {
     }
 
     fn handle_event(&mut self, event: &mut Event) {
+        use crate::core::command::CM_RADIO_SELECTED;
+        use crate::core::event::EventType;
+
+        // Mutual exclusion: another radio in our group was selected.
+        // The selecting button is focused; everyone else deselects.
+        if event.what == EventType::Broadcast
+            && event.command == CM_RADIO_SELECTED
+            && event.info == self.group_id()
+            && !self.is_focused()
+        {
+            self.deselect();
+            return;
+        }
+
         // Use Cluster trait's standard event handling
         self.handle_cluster_event(event);
     }
@@ -143,7 +157,14 @@ impl Cluster for RadioButton {
     /// Radio buttons select (don't toggle) on space
     fn on_space_pressed(&mut self) {
         self.select();
-        // TODO: Parent should deselect other radio buttons in the same group
+    }
+
+    /// Broadcast the selection so siblings in the same group deselect.
+    ///
+    /// The owning Group re-dispatches converted broadcasts to all children.
+    fn after_press(&mut self, event: &mut Event) {
+        use crate::core::command::CM_RADIO_SELECTED;
+        *event = Event::broadcast_with_info(CM_RADIO_SELECTED, self.group_id());
     }
 }
 
@@ -288,6 +309,53 @@ mod tests {
         assert_eq!(radio1.group_id(), 1);
         assert_eq!(radio2.group_id(), 1);
         assert_eq!(radio3.group_id(), 2);
+    }
+
+    #[test]
+    fn test_radio_group_mutual_exclusion() {
+        use crate::core::command::CM_RADIO_SELECTED;
+        use crate::core::event::EventType;
+
+        let mut radio1 = RadioButton::new(Rect::new(0, 0, 20, 1), "One", 1);
+        let mut radio2 = RadioButton::new(Rect::new(0, 1, 20, 2), "Two", 1);
+        let mut other_group = RadioButton::new(Rect::new(0, 2, 20, 3), "Other", 2);
+        radio2.set_selected(true);
+        other_group.set_selected(true);
+
+        // Space on focused radio1 converts the event into a group broadcast
+        radio1.set_focus(true);
+        let mut event = Event::keyboard(' ' as u16);
+        radio1.handle_event(&mut event);
+        assert!(radio1.is_selected());
+        assert_eq!(event.what, EventType::Broadcast);
+        assert_eq!(event.command, CM_RADIO_SELECTED);
+        assert_eq!(event.info, 1);
+
+        // The broadcast deselects unfocused same-group radios only
+        radio2.handle_event(&mut event);
+        other_group.handle_event(&mut event);
+        assert!(!radio2.is_selected());
+        assert!(other_group.is_selected());
+        // The focused originator keeps its selection
+        radio1.handle_event(&mut event);
+        assert!(radio1.is_selected());
+    }
+
+    #[test]
+    fn test_radio_mouse_click_selects() {
+        use crate::core::event::{EventType, MB_LEFT_BUTTON};
+        use crate::core::geometry::Point;
+
+        let mut radio = RadioButton::new(Rect::new(0, 0, 20, 1), "One", 1);
+        let mut event = Event::mouse(
+            EventType::MouseDown,
+            Point::new(2, 0),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        radio.handle_event(&mut event);
+        assert!(radio.is_selected());
+        assert_eq!(event.what, EventType::Broadcast);
     }
 
     #[test]

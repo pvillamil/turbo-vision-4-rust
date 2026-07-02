@@ -9,38 +9,53 @@
 // When clicked, displays a HistoryWindow with previous entries.
 //
 // Usage:
-//   let history = History::new(Point::new(x, y), history_id);
+//   let data = Rc::new(RefCell::new(String::new()));
+//   let input = InputLine::new(bounds, 255, Rc::clone(&data));
+//   let history = History::new(Point::new(x, y), history_id, Rc::clone(&data));
 //   // Position it to the right of the InputLine
 
-use super::history_window::HistoryWindow;
 use super::view::{View, write_line_to_terminal};
+use crate::core::command::{CM_HISTORY_SELECTED, CM_RECORD_HISTORY, CM_SHOW_HISTORY};
 use crate::core::draw::DrawBuffer;
 use crate::core::event::{Event, EventType, MB_LEFT_BUTTON};
 use crate::core::geometry::{Point, Rect};
 use crate::core::history::HistoryManager;
 use crate::core::state::StateFlags;
 use crate::terminal::Terminal;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 /// History - Dropdown button for accessing input history
 ///
-/// Matches Borland: THistory
+/// Matches Borland: THistory. The button is linked to an InputLine by sharing
+/// its `Rc<RefCell<String>>` data:
+/// - On a `CM_RECORD_HISTORY` broadcast (sent by `Dialog` when it is accepted
+///   with OK), the current input text is added to the history list.
+/// - On click, the event is converted into a `CM_SHOW_HISTORY` command (history
+///   id in `event.info`) so the owning dialog/application can open the popup.
+/// - On a `CM_HISTORY_SELECTED` broadcast for this history id, the most recent
+///   history item is copied back into the linked input data.
 pub struct History {
     bounds: Rect,
     history_id: u16,
     state: StateFlags,
+    /// Shared data of the linked InputLine (same Rc passed to InputLine::new)
+    link: Rc<RefCell<String>>,
     pub selected_item: Option<String>, // Public so InputLine can read it
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
 }
 
 impl History {
-    /// Create a new history button
+    /// Create a new history button linked to an InputLine's shared data
     ///
     /// The button is 2 characters wide (shows '▼' or similar).
-    pub fn new(pos: Point, history_id: u16) -> Self {
+    /// `link` must be the same `Rc<RefCell<String>>` passed to the InputLine.
+    pub fn new(pos: Point, history_id: u16, link: Rc<RefCell<String>>) -> Self {
         Self {
             bounds: Rect::new(pos.x, pos.y, pos.x + 2, pos.y + 1),
             history_id,
             state: 0,
+            link,
             selected_item: None,
             palette_chain: None,
         }
@@ -51,20 +66,9 @@ impl History {
         HistoryManager::has_history(self.history_id)
     }
 
-    /// Show the history window and let user select an item
-    #[allow(dead_code)]
-    fn show_history(&mut self, terminal: &mut Terminal) {
-        if !self.has_items() {
-            return;
-        }
-
-        // Create history window slightly below and to the left of the button
-        let window_pos = Point::new((self.bounds.a.x - 20).max(0), self.bounds.a.y + 1);
-
-        let mut window = HistoryWindow::new(window_pos, self.history_id, 30);
-        if let Some(selected) = window.execute(terminal) {
-            self.selected_item = Some(selected);
-        }
+    /// The history list id this button is attached to
+    pub fn history_id(&self) -> u16 {
+        self.history_id
     }
 }
 
@@ -101,11 +105,38 @@ impl View for History {
                 if self.bounds.contains(event.mouse.pos)
                     && event.mouse.buttons & MB_LEFT_BUTTON != 0
                 {
-                    // Button clicked - show history window
-                    // We need terminal access, which will be handled by parent
-                    event.clear();
+                    if self.has_items() {
+                        // Convert the click into a CM_SHOW_HISTORY command so the
+                        // owning dialog/application (which has terminal access)
+                        // can open the popup. Mouse position is preserved so the
+                        // popup can be placed near the button.
+                        event.what = EventType::Command;
+                        event.command = CM_SHOW_HISTORY;
+                        event.info = self.history_id;
+                    } else {
+                        event.clear();
+                    }
                 }
             }
+            EventType::Broadcast => match event.command {
+                CM_RECORD_HISTORY => {
+                    // Dialog is being accepted: record the linked input text.
+                    // Matches Borland: THistory handling cmRecordHistory.
+                    let text = self.link.borrow().clone();
+                    if !text.is_empty() {
+                        HistoryManager::add(self.history_id, text);
+                    }
+                }
+                CM_HISTORY_SELECTED if event.info == self.history_id => {
+                    // A history item was picked in the popup; it was moved to the
+                    // front of the list. Copy it into the linked input data.
+                    if let Some(item) = HistoryManager::get_list(self.history_id).first() {
+                        self.selected_item = Some(item.clone());
+                        *self.link.borrow_mut() = item.clone();
+                    }
+                }
+                _ => {}
+            },
             _ => {}
         }
     }
@@ -140,6 +171,7 @@ impl View for History {
 pub struct HistoryBuilder {
     pos: Option<Point>,
     history_id: Option<u16>,
+    link: Option<Rc<RefCell<String>>>,
 }
 
 impl HistoryBuilder {
@@ -147,7 +179,15 @@ impl HistoryBuilder {
         Self {
             pos: None,
             history_id: None,
+            link: None,
         }
+    }
+
+    /// Sets the linked InputLine shared data (required).
+    #[must_use]
+    pub fn link(mut self, link: Rc<RefCell<String>>) -> Self {
+        self.link = Some(link);
+        self
     }
 
     #[must_use]
@@ -165,7 +205,8 @@ impl HistoryBuilder {
     pub fn build(self) -> History {
         let pos = self.pos.expect("History pos must be set");
         let history_id = self.history_id.expect("History history_id must be set");
-        History::new(pos, history_id)
+        let link = self.link.expect("History link must be set");
+        History::new(pos, history_id, link)
     }
 
     pub fn build_boxed(self) -> Box<History> {
@@ -183,21 +224,108 @@ impl Default for HistoryBuilder {
 mod tests {
     use super::*;
 
+    fn link(text: &str) -> Rc<RefCell<String>> {
+        Rc::new(RefCell::new(text.to_string()))
+    }
+
     #[test]
     fn test_history_button_creation() {
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
 
-        let button = History::new(Point::new(20, 5), 1);
+        let button = History::new(Point::new(20, 5), 1, link(""));
         assert!(!button.has_items());
         assert_eq!(button.bounds.width(), 2);
     }
 
     #[test]
     fn test_history_button_with_items() {
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
         HistoryManager::add(2, "test".to_string());
 
-        let button = History::new(Point::new(20, 5), 2);
+        let button = History::new(Point::new(20, 5), 2, link(""));
         assert!(button.has_items());
+    }
+
+    #[test]
+    fn test_record_history_broadcast_records_linked_data() {
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear_all();
+
+        let data = link("hello world");
+        let mut button = History::new(Point::new(20, 5), 3, Rc::clone(&data));
+
+        let mut event = Event::broadcast(CM_RECORD_HISTORY);
+        button.handle_event(&mut event);
+
+        assert_eq!(HistoryManager::get_list(3), vec!["hello world".to_string()]);
+        // Broadcasts are not consumed so all History views can record
+        assert_eq!(event.what, EventType::Broadcast);
+
+        // Empty input records nothing
+        data.borrow_mut().clear();
+        let mut event = Event::broadcast(CM_RECORD_HISTORY);
+        button.handle_event(&mut event);
+        assert_eq!(HistoryManager::count(3), 1);
+    }
+
+    #[test]
+    fn test_click_converts_to_show_history_command() {
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear_all();
+        HistoryManager::add(4, "entry".to_string());
+
+        let mut button = History::new(Point::new(20, 5), 4, link(""));
+        let mut event = Event::mouse(
+            EventType::MouseDown,
+            Point::new(20, 5),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        button.handle_event(&mut event);
+
+        assert_eq!(event.what, EventType::Command);
+        assert_eq!(event.command, CM_SHOW_HISTORY);
+        assert_eq!(event.info, 4);
+        // Mouse position preserved so the popup can be placed near the button
+        assert_eq!(event.mouse.pos, Point::new(20, 5));
+    }
+
+    #[test]
+    fn test_click_with_empty_history_is_consumed() {
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear_all();
+
+        let mut button = History::new(Point::new(20, 5), 5, link(""));
+        let mut event = Event::mouse(
+            EventType::MouseDown,
+            Point::new(21, 5),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        button.handle_event(&mut event);
+        assert_eq!(event.what, EventType::Nothing);
+    }
+
+    #[test]
+    fn test_history_selected_broadcast_updates_link() {
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear_all();
+        HistoryManager::add(6, "older".to_string());
+        HistoryManager::add(6, "picked".to_string());
+
+        let data = link("current");
+        let mut button = History::new(Point::new(20, 5), 6, Rc::clone(&data));
+
+        let mut event = Event::broadcast_with_info(CM_HISTORY_SELECTED, 6);
+        button.handle_event(&mut event);
+        assert_eq!(*data.borrow(), "picked");
+
+        // Broadcast for a different history id is ignored
+        *data.borrow_mut() = "unchanged".to_string();
+        let mut event = Event::broadcast_with_info(CM_HISTORY_SELECTED, 7);
+        button.handle_event(&mut event);
+        assert_eq!(*data.borrow(), "unchanged");
     }
 }

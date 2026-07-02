@@ -45,7 +45,14 @@ impl HistoryWindow {
         let window_height = viewer_height + 2; // +2 for frame
 
         let window_bounds = Rect::new(pos.x, pos.y, pos.x + width, pos.y + window_height);
-        let viewer_bounds = Rect::new(1, 1, width - 2, viewer_height + 1);
+        // Viewer bounds are in absolute screen coordinates, inset one cell inside
+        // the window frame (the viewer draws directly to the terminal).
+        let viewer_bounds = Rect::new(
+            pos.x + 1,
+            pos.y + 1,
+            pos.x + width - 1,
+            pos.y + 1 + viewer_height,
+        );
 
         let window = Window::new(window_bounds, "History");
         let mut viewer = HistoryViewer::new(viewer_bounds, history_id);
@@ -107,6 +114,7 @@ mod tests {
     fn test_history_window_creation() {
         // Use unique history_id and clear only that ID to avoid race conditions
         HistoryManager::clear(10);
+        let _guard = crate::core::history::test_lock();
         HistoryManager::add(10, "test1".to_string());
         HistoryManager::add(10, "test2".to_string());
         HistoryManager::add(10, "test3".to_string());
@@ -115,6 +123,21 @@ mod tests {
 
         // Window should be sized based on items
         assert_eq!(window.viewer.item_count(), 3);
+    }
+
+    #[test]
+    fn test_history_viewer_bounds_relative_to_window() {
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear(11);
+        HistoryManager::add(11, "a".to_string());
+        HistoryManager::add(11, "b".to_string());
+        HistoryManager::add(11, "c".to_string());
+
+        let window = HistoryWindow::new(Point::new(10, 5), 11, 30);
+
+        // Viewer is inset one cell inside the window frame at the window's
+        // screen position (regression: it used to be at absolute (1,1)).
+        assert_eq!(window.viewer.bounds(), Rect::new(11, 6, 39, 9));
     }
 
     #[test]
@@ -140,6 +163,8 @@ mod tests {
 
         // Should have all 15 items but viewer height capped at 10
         assert_eq!(window.viewer.item_count(), 15);
+        // Viewer must sit inside the window frame at its screen position
+        assert_eq!(window.viewer.bounds().a, Point::new(11, 6));
         // Viewer bounds height should be at most 10
         let viewer_height = window.viewer.bounds().height();
         assert!(

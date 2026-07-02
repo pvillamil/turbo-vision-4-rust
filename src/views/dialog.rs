@@ -210,6 +210,14 @@ impl Dialog {
                     if event.what == EventType::Command {
                         self.handle_event(&mut event);
                     }
+
+                    // A History button converted its click into CM_SHOW_HISTORY;
+                    // open the popup here, where we have terminal access.
+                    if event.what == EventType::Command
+                        && event.command == crate::core::command::CM_SHOW_HISTORY
+                    {
+                        self.show_history_popup(&mut event, &mut app.terminal);
+                    }
                 }
                 None => {
                     // Timeout with no events - call idle() to update animations, etc.
@@ -228,6 +236,32 @@ impl Dialog {
         }
 
         self.result
+    }
+
+    /// Open the history popup for a `CM_SHOW_HISTORY` command event.
+    ///
+    /// Runs the `HistoryWindow` modally on the given terminal. If the user picks
+    /// an item, it is moved to the front of the history list and a
+    /// `CM_HISTORY_SELECTED` broadcast is dispatched to the dialog's children so
+    /// the linked `History` view copies it into its InputLine's shared data.
+    fn show_history_popup(&mut self, event: &mut Event, terminal: &mut Terminal) {
+        use crate::core::command::CM_HISTORY_SELECTED;
+        use crate::core::geometry::Point;
+        use crate::core::history::HistoryManager;
+        use crate::views::history_window::HistoryWindow;
+
+        let history_id = event.info;
+        // Place the popup just below the clicked button, shifted left so the
+        // dropdown covers the input line it belongs to.
+        let pos = Point::new((event.mouse.pos.x - 20).max(0), event.mouse.pos.y + 1);
+        let mut window = HistoryWindow::new(pos, history_id, 30);
+        if let Some(selected) = window.execute(terminal) {
+            // Move the selection to the front so History views can find it.
+            HistoryManager::add(history_id, selected);
+            let mut sel = Event::broadcast_with_info(CM_HISTORY_SELECTED, history_id);
+            self.window.handle_event(&mut sel);
+        }
+        event.clear();
     }
 }
 
@@ -309,10 +343,25 @@ impl View for Dialog {
                     }
                     CM_OK | CM_YES | CM_NO => {
                         // OK/Yes/No button pressed
+                        // On accept (OK/Yes, not No/Cancel), broadcast CM_RECORD_HISTORY
+                        // so History views record their linked InputLine data.
+                        // Matches Borland: TButton::press() message(owner, evBroadcast,
+                        // cmRecordHistory, 0) before emitting the command.
+                        if event.command == CM_OK || event.command == CM_YES {
+                            let mut record =
+                                Event::broadcast(crate::core::command::CM_RECORD_HISTORY);
+                            self.window.handle_event(&mut record);
+                        }
                         // End the modal loop with the command
                         // Matches Borland: endModal(command)
                         self.window.end_modal(event.command);
                         event.clear();
+                    }
+                    crate::core::command::CM_SHOW_HISTORY => {
+                        // A History button was clicked. Leave the event alone so the
+                        // modal loop in Dialog::execute() (which has terminal access)
+                        // can open the history popup. Must not fall through to the
+                        // "< 1000 closes the dialog" rule below.
                     }
                     _ => {
                         // Other commands - distinguish between button commands and internal commands
@@ -711,6 +760,66 @@ mod tests {
             0,
             "Non-modal dialog should not set end_state for internal commands"
         );
+    }
+
+    /// History views must record their linked InputLine data when the dialog
+    /// is accepted with CM_OK (via the CM_RECORD_HISTORY broadcast), but not
+    /// when it is cancelled.
+    #[test]
+    fn test_dialog_ok_records_history() {
+        use crate::core::command::CM_OK;
+        use crate::core::geometry::Point;
+        use crate::core::history::HistoryManager;
+        use crate::views::history::History;
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let _guard = crate::core::history::test_lock();
+        HistoryManager::clear_all();
+
+        let make_dialog = |text: &str| {
+            let data = Rc::new(RefCell::new(text.to_string()));
+            let mut dialog = Dialog::new(Rect::new(0, 0, 40, 10), "Test");
+            let state = dialog.state();
+            dialog.set_state(state | SF_MODAL);
+            dialog.add(Box::new(History::new(Point::new(30, 2), 42, data)));
+            dialog
+        };
+
+        // Cancel does NOT record
+        let mut dialog = make_dialog("not recorded");
+        let mut event = Event::command(CM_CANCEL);
+        dialog.handle_event(&mut event);
+        assert_eq!(HistoryManager::count(42), 0, "Cancel must not record");
+
+        // OK records the linked data
+        let mut dialog = make_dialog("recorded entry");
+        let mut event = Event::command(CM_OK);
+        dialog.handle_event(&mut event);
+        assert_eq!(
+            HistoryManager::get_list(42),
+            vec!["recorded entry".to_string()]
+        );
+        assert_eq!(dialog.get_end_state(), CM_OK);
+    }
+
+    /// CM_SHOW_HISTORY must not be swallowed by the "< 1000 closes the dialog"
+    /// rule; it is left pending so the modal loop can open the popup.
+    #[test]
+    fn test_dialog_show_history_command_passes_through() {
+        use crate::core::command::CM_SHOW_HISTORY;
+
+        let mut dialog = Dialog::new(Rect::new(0, 0, 40, 10), "Test");
+        let state = dialog.state();
+        dialog.set_state(state | SF_MODAL);
+
+        let mut event = Event::command(CM_SHOW_HISTORY);
+        event.info = 42;
+        dialog.handle_event(&mut event);
+
+        assert_eq!(dialog.get_end_state(), 0, "must not close the dialog");
+        assert_eq!(event.what, EventType::Command, "event left for modal loop");
+        assert_eq!(event.command, CM_SHOW_HISTORY);
     }
 
     #[test]

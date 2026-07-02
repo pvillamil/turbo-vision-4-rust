@@ -278,4 +278,30 @@ mod tests {
 
         assert!(checkbox.is_checked());
     }
+
+    #[test]
+    fn mouse_click_toggles_checkbox() {
+        use crate::core::event::{Event, EventType, MB_LEFT_BUTTON};
+        use crate::core::geometry::Point;
+
+        let mut cb = CheckBox::new(Rect::new(0, 0, 20, 1), "Check me");
+        let mut ev = Event::mouse(
+            EventType::MouseDown,
+            Point::new(2, 0),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        cb.handle_event(&mut ev);
+        assert!(cb.is_checked());
+        assert_eq!(ev.what, EventType::Nothing);
+
+        let mut ev = Event::mouse(
+            EventType::MouseDown,
+            Point::new(2, 0),
+            MB_LEFT_BUTTON,
+            false,
+        );
+        cb.handle_event(&mut ev);
+        assert!(!cb.is_checked());
+    }
 }

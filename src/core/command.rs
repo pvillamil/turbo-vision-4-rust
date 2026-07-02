@@ -74,6 +74,10 @@ pub const CM_KEYBOARD_REF: CommandId = 141;
 
 // Internal commands
 pub const CM_FOCUS_LINK: CommandId = 66; // Label hotkey: focus the linked control (ViewId stored in key_code)
+pub const CM_RADIO_SELECTED: CommandId = 67; // Broadcast: radio button selected (group id in event.info)
+pub const CM_RECORD_HISTORY: CommandId = 68; // Broadcast: dialog accepted with OK — History views record their linked data (Borland: cmRecordHistory)
+pub const CM_SHOW_HISTORY: CommandId = 69; // Command: open the history popup for a History button (history id in event.info)
+pub const CM_HISTORY_SELECTED: CommandId = 70; // Broadcast: a history item was selected (history id in event.info; item is at front of HistoryManager list)
 
 // Demo commands
 pub const CM_LISTBOX_DEMO: CommandId = 150;

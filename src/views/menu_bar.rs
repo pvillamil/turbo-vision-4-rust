@@ -673,6 +673,17 @@ impl View for MenuBar {
                         event.clear();
                         return;
                     }
+
+                    // Item shortcuts (F2, Ctrl+O, ...) work while the bar is
+                    // closed. Matches Borland: TMenuView::hotKey()/findHotKey()
+                    for submenu in &self.submenus {
+                        if let Some(cmd) = submenu.menu.find_hotkey(event.key_code) {
+                            if command_set::command_enabled(cmd) {
+                                *event = Event::command(cmd);
+                            }
+                            return;
+                        }
+                    }
                 }
 
                 // Handle dropdown navigation

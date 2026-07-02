@@ -335,7 +335,8 @@ impl ChDirDialog {
 
         // History button - adjusted: TRect( 48, 3, 51, 4 )
         // Shows a dropdown button (▼) that displays previous directories
-        let history_button = History::new(Point::new(48, 3), history_id);
+        let history_button =
+            History::new(Point::new(48, 3), history_id, Rc::clone(&dir_input_data));
         dialog.add(Box::new(history_button));
 
         // Vertical scrollbar - adjusted: TRect( 50, 6, 51, 16 )

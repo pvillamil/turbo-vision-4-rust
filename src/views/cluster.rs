@@ -155,20 +155,38 @@ pub trait Cluster: View {
 
     /// Handle standard cluster events
     ///
-    /// Matches Borland: TCluster::handleEvent() keyboard logic
+    /// Matches Borland: TCluster::handleEvent() keyboard and mouse logic
     /// Returns true if event was handled
     fn handle_cluster_event(&mut self, event: &mut Event) -> bool {
-        if event.what == EventType::Keyboard && self.is_focused() {
-            if self.cluster_state().enable_keyboard {
-                // Space key toggles/selects
-                if event.key_code == ' ' as u16 {
+        match event.what {
+            EventType::Keyboard if self.is_focused() => {
+                if self.cluster_state().enable_keyboard && event.key_code == ' ' as u16 {
                     self.on_space_pressed();
-                    event.clear();
+                    self.after_press(event);
                     return true;
                 }
             }
+            EventType::MouseDown => {
+                // Matches Borland: TCluster::handleEvent() evMouseDown press.
+                // The owning Group has already focused us on the click.
+                use crate::core::event::MB_LEFT_BUTTON;
+                let pos = event.mouse.pos;
+                if event.mouse.buttons & MB_LEFT_BUTTON != 0 && self.bounds().contains(pos) {
+                    self.on_space_pressed();
+                    self.after_press(event);
+                    return true;
+                }
+            }
+            _ => {}
         }
         false
+    }
+
+    /// Consume the triggering event after a press.
+    ///
+    /// Radio buttons override this to broadcast the group change instead.
+    fn after_press(&mut self, event: &mut Event) {
+        event.clear();
     }
 
     /// Called when space key is pressed

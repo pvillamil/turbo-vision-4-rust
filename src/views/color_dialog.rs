@@ -23,8 +23,10 @@ pub struct ColorDialog {
     dialog: Dialog,
     _fg_selector_id: ViewId,
     _bg_selector_id: ViewId,
-    initial_attr: Attr,
     selected_attr: Option<Attr>,
+    // Selection values shared with the embedded ColorSelectors
+    fg_color: std::rc::Rc<std::cell::RefCell<u8>>,
+    bg_color: std::rc::Rc<std::cell::RefCell<u8>>,
 }
 
 impl ColorDialog {
@@ -49,7 +51,11 @@ impl ColorDialog {
             "Foreground:",
         )));
 
-        let fg_selector = ColorSelector::new(Rect::new(2, 5, 26, 8));
+        let initial_byte = initial_attr.to_u8();
+        let fg_color = std::rc::Rc::new(std::cell::RefCell::new(initial_byte & 0x0F));
+        let bg_color = std::rc::Rc::new(std::cell::RefCell::new((initial_byte >> 4) & 0x0F));
+
+        let fg_selector = ColorSelector::with_shared(Rect::new(2, 5, 26, 8), fg_color.clone());
         let fg_selector_id = dialog.add(Box::new(fg_selector));
 
         // Background color selector
@@ -58,7 +64,7 @@ impl ColorDialog {
             "Background:",
         )));
 
-        let bg_selector = ColorSelector::new(Rect::new(2, 10, 26, 13));
+        let bg_selector = ColorSelector::with_shared(Rect::new(2, 10, 26, 13), bg_color.clone());
         let bg_selector_id = dialog.add(Box::new(bg_selector));
 
         // Preview area (would show the colors in action)
@@ -100,8 +106,9 @@ impl ColorDialog {
             dialog,
             _fg_selector_id: fg_selector_id,
             _bg_selector_id: bg_selector_id,
-            initial_attr,
             selected_attr: None,
+            fg_color,
+            bg_color,
         }
     }
 
@@ -112,9 +119,12 @@ impl ColorDialog {
         let result = self.dialog.execute(app);
 
         if result == CM_OK {
-            // Get colors from selectors (simplified - would need selector access)
-            // For now, return the initial attribute
-            Some(self.initial_attr)
+            // Read the selections back from the shared selector values
+            let fg = *self.fg_color.borrow() & 0x0F;
+            let bg = *self.bg_color.borrow() & 0x0F;
+            let attr = Attr::from_u8((bg << 4) | fg);
+            self.selected_attr = Some(attr);
+            Some(attr)
         } else {
             None
         }

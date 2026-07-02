@@ -239,6 +239,33 @@ impl Menu {
         self.items.push(item);
     }
 
+    /// Find the command bound to a keyboard shortcut, searching submenus.
+    ///
+    /// Matches Borland: TMenuView::findHotKey() — lets item shortcuts like F2
+    /// work while the menu is closed.
+    pub fn find_hotkey(&self, key_code: KeyCode) -> Option<CommandId> {
+        if key_code == 0 {
+            return None;
+        }
+        for item in &self.items {
+            match item {
+                MenuItem::Regular {
+                    command,
+                    key_code: item_key,
+                    enabled: true,
+                    ..
+                } if *item_key == key_code => return Some(*command),
+                MenuItem::SubMenu { menu, .. } => {
+                    if let Some(cmd) = menu.find_hotkey(key_code) {
+                        return Some(cmd);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
     /// Set the default item by index
     pub fn set_default(&mut self, index: usize) {
         if index < self.items.len() {
@@ -542,5 +569,37 @@ mod tests {
             .build();
 
         assert!(!item.is_selectable());
+    }
+
+    #[test]
+    fn find_hotkey_searches_nested_submenus() {
+        let inner = Menu::from_items(vec![MenuItem::Regular {
+            text: "Deep".into(),
+            command: 42,
+            key_code: 0x3C00, // F2
+            help_ctx: 0,
+            enabled: true,
+            shortcut: None,
+        }]);
+        let menu = Menu::from_items(vec![
+            MenuItem::Regular {
+                text: "Top".into(),
+                command: 1,
+                key_code: 0,
+                help_ctx: 0,
+                enabled: true,
+                shortcut: None,
+            },
+            MenuItem::SubMenu {
+                text: "Sub".into(),
+                key_code: 0,
+                help_ctx: 0,
+                menu: inner,
+            },
+        ]);
+        assert_eq!(menu.find_hotkey(0x3C00), Some(42));
+        assert_eq!(menu.find_hotkey(0x9999), None);
+        // key_code 0 never matches (plain items would otherwise all match)
+        assert_eq!(menu.find_hotkey(0), None);
     }
 }

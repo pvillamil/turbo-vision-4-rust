@@ -186,6 +186,11 @@ pub struct Event {
     pub key_modifiers: KeyModifiers,
     pub mouse: MouseEvent,
     pub command: CommandId,
+    /// Extra data carried by command/broadcast events.
+    ///
+    /// Matches Borland's TEvent.message.infoPtr/infoInt (e.g. the radio-button
+    /// group id on a selection broadcast). Zero when unused.
+    pub info: u16,
 }
 
 impl Event {
@@ -200,6 +205,7 @@ impl Event {
                 double_click: false,
             },
             command: 0,
+            info: 0,
         }
     }
 
@@ -224,6 +230,16 @@ impl Event {
         Self {
             what: EventType::Broadcast,
             command: cmd,
+            ..Self::nothing()
+        }
+    }
+
+    /// Create a broadcast event carrying extra data in `info`.
+    pub fn broadcast_with_info(cmd: CommandId, info: u16) -> Self {
+        Self {
+            what: EventType::Broadcast,
+            command: cmd,
+            info,
             ..Self::nothing()
         }
     }

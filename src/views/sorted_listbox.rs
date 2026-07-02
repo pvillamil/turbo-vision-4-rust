@@ -25,7 +25,7 @@
 use super::list_viewer::{ListViewer, ListViewerState};
 use super::view::View;
 use crate::core::command::CommandId;
-use crate::core::event::Event;
+use crate::core::event::{Event, EventType, KB_BACKSPACE};
 use crate::core::geometry::Rect;
 use crate::core::state::StateFlags;
 use crate::terminal::Terminal;
@@ -41,6 +41,8 @@ pub struct SortedListBox {
     state: StateFlags,
     _on_select_command: CommandId,
     case_sensitive: bool,
+    /// Incremental type-to-search buffer (Borland: TSortedListBox searchPos)
+    search_string: String,
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
 }
 
@@ -54,6 +56,7 @@ impl SortedListBox {
             state: 0,
             _on_select_command: on_select_command,
             case_sensitive: false,
+            search_string: String::new(),
             palette_chain: None,
         }
     }
@@ -145,9 +148,11 @@ impl SortedListBox {
 
     /// Helper for case-sensitive prefix search
     fn find_prefix_case_sensitive(&self, prefix: &str) -> Option<usize> {
+        let prefix_chars = prefix.chars().count();
         let compare_fn = |item: &String| -> std::cmp::Ordering {
-            let item_prefix = &item[..prefix.len().min(item.len())];
-            item_prefix.cmp(prefix)
+            // Compare by characters so multibyte items can't split
+            let item_prefix: String = item.chars().take(prefix_chars).collect();
+            item_prefix.as_str().cmp(prefix)
         };
 
         match self.items.binary_search_by(compare_fn) {
@@ -177,9 +182,11 @@ impl SortedListBox {
     /// Helper for case-insensitive prefix search
     fn find_prefix_case_insensitive(&self, prefix: &str) -> Option<usize> {
         let prefix_lower = prefix.to_lowercase();
+        let prefix_chars = prefix_lower.chars().count();
 
         let compare_fn = |item: &String| -> std::cmp::Ordering {
-            let item_prefix = &item[..prefix_lower.len().min(item.len())];
+            // Compare by characters so multibyte items can't split
+            let item_prefix: String = item.chars().take(prefix_chars).collect();
             item_prefix.to_lowercase().as_str().cmp(&prefix_lower)
         };
 
@@ -306,11 +313,38 @@ impl View for SortedListBox {
     }
 
     fn handle_event(&mut self, event: &mut Event) {
+        // Incremental type-to-search (matches Borland: TSortedListBox::handleEvent):
+        // typed characters extend a search prefix and jump to the first match,
+        // Backspace shrinks it, navigation keys reset it
+        if event.what == EventType::Keyboard && self.is_focused() {
+            match event.key_code {
+                KB_BACKSPACE if !self.search_string.is_empty() => {
+                    self.search_string.pop();
+                    let prefix = self.search_string.clone();
+                    self.focus_prefix(&prefix);
+                    event.clear();
+                    return;
+                }
+                key @ 32..=126 => {
+                    let mut candidate = self.search_string.clone();
+                    candidate.push(key as u8 as char);
+                    if self.focus_prefix(&candidate) {
+                        self.search_string = candidate;
+                    }
+                    // Reject non-matching characters silently (Borland keeps
+                    // the old prefix and beeps)
+                    event.clear();
+                    return;
+                }
+                _ => {
+                    // Navigation or other keys restart the search
+                    self.search_string.clear();
+                }
+            }
+        }
+
         // Use ListViewer trait's standard event handling
         self.handle_list_event(event);
-
-        // TODO: Add incremental search on keyboard input
-        // When user types letters, find and focus on matching items
     }
 
     fn can_focus(&self) -> bool {
@@ -513,6 +547,38 @@ mod tests {
         assert!(!listbox.focus_prefix("Z"));
         // Selection should remain unchanged
         assert_eq!(listbox.get_selection(), Some(0));
+    }
+
+    #[test]
+    fn test_incremental_search_by_typing() {
+        let mut listbox = SortedListBox::new(Rect::new(0, 0, 20, 10), 1000);
+        listbox.set_items(vec![
+            "Apple".to_string(),
+            "Apricot".to_string(),
+            "Banana".to_string(),
+            "Berry".to_string(),
+        ]);
+        listbox.set_focus(true);
+
+        // Type "b" then "e": jumps to Banana, then Berry
+        let mut event = Event::keyboard('b' as u16);
+        listbox.handle_event(&mut event);
+        assert_eq!(event.what, EventType::Nothing);
+        assert_eq!(listbox.get_selected_item(), Some("Banana"));
+
+        let mut event = Event::keyboard('e' as u16);
+        listbox.handle_event(&mut event);
+        assert_eq!(listbox.get_selected_item(), Some("Berry"));
+
+        // A non-matching character keeps the current prefix and selection
+        let mut event = Event::keyboard('z' as u16);
+        listbox.handle_event(&mut event);
+        assert_eq!(listbox.get_selected_item(), Some("Berry"));
+
+        // Backspace shrinks the prefix back to "b" -> Banana (first match)
+        let mut event = Event::keyboard(KB_BACKSPACE);
+        listbox.handle_event(&mut event);
+        assert_eq!(listbox.get_selected_item(), Some("Banana"));
     }
 
     #[test]
