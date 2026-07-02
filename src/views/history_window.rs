@@ -112,9 +112,8 @@ mod tests {
 
     #[test]
     fn test_history_window_creation() {
-        // Use unique history_id and clear only that ID to avoid race conditions
-        HistoryManager::clear(10);
         let _guard = crate::core::history::test_lock();
+        HistoryManager::clear(10);
         HistoryManager::add(10, "test1".to_string());
         HistoryManager::add(10, "test2".to_string());
         HistoryManager::add(10, "test3".to_string());
@@ -142,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_history_window_empty() {
-        // Use unique history_id and clear only that ID to avoid race conditions
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear(99);
 
         let window = HistoryWindow::new(Point::new(10, 5), 99, 30);
@@ -151,7 +150,7 @@ mod tests {
 
     #[test]
     fn test_history_window_many_items() {
-        // Use unique history_id and clear only that ID to avoid race conditions
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear(20);
 
         // Add 15 items

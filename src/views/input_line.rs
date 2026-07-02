@@ -417,6 +417,29 @@ impl View for InputLine {
                                 text.insert(at, ch);
                             }
                             self.cursor_pos += 1;
+
+                            // Let the validator auto-fill/transform the text.
+                            // Matches Borland: TInputLine::handleEvent() calls
+                            // checkValid(False) after inserting a character,
+                            // which lets picture masks insert literals
+                            // ("12" + mask "##/##" -> "12/") and force
+                            // uppercase for `&`/`!` positions.
+                            if let Some(ref validator) = self.validator {
+                                let filled = validator.borrow().complete(&self.data.borrow());
+                                if let Some(filled) = filled {
+                                    let filled_len = char_len(&filled);
+                                    let old_len = char_len(&self.data.borrow());
+                                    *self.data.borrow_mut() = filled;
+                                    if filled_len > old_len {
+                                        // Literals were appended: move the
+                                        // char-based cursor past the fill.
+                                        self.cursor_pos = filled_len.min(self.max_length);
+                                    } else {
+                                        self.cursor_pos = self.cursor_pos.min(filled_len);
+                                    }
+                                }
+                            }
+
                             self.make_cursor_visible();
                             event.clear();
                         }
@@ -610,6 +633,74 @@ mod tests {
         let mut ev = Event::keyboard('x' as u16);
         input.handle_event(&mut ev);
         assert_eq!(*data.borrow(), "x");
+    }
+
+    #[test]
+    fn picture_validator_auto_fills_literals_while_typing() {
+        use crate::views::picture_validator::picture_validator;
+
+        let data = Rc::new(RefCell::new(String::new()));
+        let mut input = InputLine::with_validator(
+            Rect::new(0, 0, 20, 1),
+            10,
+            data.clone(),
+            picture_validator("##/##"),
+        );
+        input.set_focus(true);
+
+        for ch in ['1', '2'] {
+            let mut ev = Event::keyboard(ch as u16);
+            input.handle_event(&mut ev);
+        }
+        // The '/' literal is auto-inserted and the cursor moves past it
+        assert_eq!(*data.borrow(), "12/");
+        assert_eq!(input.cursor_pos, 3);
+
+        for ch in ['3', '4'] {
+            let mut ev = Event::keyboard(ch as u16);
+            input.handle_event(&mut ev);
+        }
+        assert_eq!(*data.borrow(), "12/34");
+    }
+
+    #[test]
+    fn picture_validator_forces_uppercase_while_typing() {
+        use crate::views::picture_validator::picture_validator;
+
+        // `!` = any char uppercased, `&` = letter uppercased
+        let data = Rc::new(RefCell::new(String::new()));
+        let mut input = InputLine::with_validator(
+            Rect::new(0, 0, 20, 1),
+            10,
+            data.clone(),
+            picture_validator("!&"),
+        );
+        input.set_focus(true);
+
+        for ch in ['a', 'b'] {
+            let mut ev = Event::keyboard(ch as u16);
+            input.handle_event(&mut ev);
+        }
+        assert_eq!(*data.borrow(), "AB");
+        assert_eq!(input.cursor_pos, 2);
+    }
+
+    #[test]
+    fn picture_validator_rejects_invalid_chars() {
+        use crate::views::picture_validator::picture_validator;
+
+        let data = Rc::new(RefCell::new(String::new()));
+        let mut input = InputLine::with_validator(
+            Rect::new(0, 0, 20, 1),
+            10,
+            data.clone(),
+            picture_validator("###"),
+        );
+        input.set_focus(true);
+
+        let mut ev = Event::keyboard('x' as u16);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "");
     }
 
     #[test]

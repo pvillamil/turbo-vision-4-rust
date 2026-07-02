@@ -30,7 +30,8 @@
 //! - `"*"` - Shows all files
 //! - `"*.rs"` - Shows only files ending with `.rs`
 //! - `"*.toml"` - Shows only files ending with `.toml`
-//! - `"test"` - Shows files containing "test" in their name
+//! - `"a?c.txt"` - `?` matches any single character
+//! - `"test"` - No wildcard characters: matches only a file named exactly "test"
 //!
 //! **Note**: Directories are always shown regardless of the wildcard pattern.
 //!
@@ -116,6 +117,91 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 const CMD_FILE_SELECTED: u16 = 1000;
+
+/// What a typed/selected name in the file dialog should do.
+/// Mirrors the decision order of Borland's `TFileDialog::valid()`
+/// (TFileDialog.cc:230-279): wildcard → refilter, existing directory →
+/// navigate, otherwise → file result.
+#[derive(Debug, PartialEq, Eq)]
+enum SelectionAction {
+    /// Navigate to the parent directory ("..").
+    NavigateParent,
+    /// Navigate into an existing directory (dialog stays open).
+    Navigate(PathBuf),
+    /// Apply a new wildcard filter, optionally after navigating.
+    Refilter {
+        dir: Option<PathBuf>,
+        wildcard: String,
+    },
+    /// A file was chosen; close the dialog returning this path.
+    SelectFile(PathBuf),
+}
+
+/// Classifies `file_name` relative to `current` following Borland's
+/// `TFileDialog::valid()` order. Pure function so it can be unit tested.
+fn classify_selection(current: &std::path::Path, file_name: &str) -> SelectionAction {
+    if file_name == ".." {
+        return SelectionAction::NavigateParent;
+    }
+    if file_name.starts_with('[') && file_name.ends_with(']') && file_name.len() >= 2 {
+        // Listbox directory entry "[dirname]"
+        return SelectionAction::Navigate(current.join(&file_name[1..file_name.len() - 1]));
+    }
+
+    // Split off a directory part, if any. `Path::join` handles absolute
+    // paths by replacing the base.
+    let (dir_part, file_part) = match file_name.rfind('/') {
+        Some(pos) => (&file_name[..=pos], &file_name[pos + 1..]),
+        None => ("", file_name),
+    };
+    let base = if dir_part.is_empty() {
+        current.to_path_buf()
+    } else {
+        current.join(dir_part)
+    };
+
+    // 1. Wildcard → refilter (navigating first if a path was given)
+    if file_part.contains('*') || file_part.contains('?') {
+        return SelectionAction::Refilter {
+            dir: if dir_part.is_empty() {
+                None
+            } else {
+                Some(base)
+            },
+            wildcard: file_part.to_string(),
+        };
+    }
+
+    let full = if file_part.is_empty() {
+        base
+    } else {
+        base.join(file_part)
+    };
+
+    // 2. Existing directory → navigate into it
+    if full.is_dir() {
+        return SelectionAction::Navigate(full);
+    }
+
+    // 3. Otherwise it is a file result
+    SelectionAction::SelectFile(full)
+}
+
+/// Glob matcher supporting `*` (any run of chars) and `?` (any single char)
+/// anywhere in the pattern. Case-sensitive, like the underlying OS.
+fn glob_match(pattern: &str, name: &str) -> bool {
+    fn matches(p: &[char], n: &[char]) -> bool {
+        match p.first() {
+            None => n.is_empty(),
+            Some('*') => matches(&p[1..], n) || (!n.is_empty() && matches(p, &n[1..])),
+            Some('?') => !n.is_empty() && matches(&p[1..], &n[1..]),
+            Some(&c) => n.first() == Some(&c) && matches(&p[1..], &n[1..]),
+        }
+    }
+    let p: Vec<char> = pattern.chars().collect();
+    let n: Vec<char> = name.chars().collect();
+    matches(&p, &n)
+}
 
 // Child indices in the dialog
 const CHILD_LISTBOX: usize = 4; // ListBox
@@ -490,48 +576,47 @@ impl FileDialog {
         // - A folder to navigate into (returns None, dialog stays open)
         // - A file to return (returns Some(path), closes dialog)
         //
-        // Returns None when a folder is selected → dialog stays open and refreshes
+        // Returns None when a folder/wildcard is selected → dialog stays open
         // Returns Some(path) when a file is selected → closes dialog with file path
-
-        // Matches Borland: TFileDialog::valid() parsing (tfiledia.cc:98-124)
-
-        // Check if input contains directory/wildcard format (e.g., "dirname/*.txt")
-        if let Some(slash_pos) = file_name.rfind('/') {
-            let dir_part = &file_name[..slash_pos];
-            let file_part = &file_name[slash_pos + 1..];
-
-            // Navigate to the directory
-            if !dir_part.is_empty() {
-                self.current_path.push(dir_part);
+        //
+        // Matches Borland's TFileDialog::valid() order (TFileDialog.cc:230-279):
+        // wildcard → refilter; existing directory → navigate; otherwise treat
+        // as a file result (navigating to its parent dir if a path was given).
+        match classify_selection(&self.current_path, file_name) {
+            SelectionAction::NavigateParent => {
+                if let Some(parent) = self.current_path.parent() {
+                    self.current_path = parent.to_path_buf();
+                    self.rebuild_and_redraw(terminal);
+                }
+                None
             }
-
-            // Update wildcard if file_part contains wildcards
-            if self.contains_wildcards(file_part) {
-                self.wildcard = file_part.to_string();
-            }
-
-            // rebuild_and_redraw will refresh the dialog with new directory contents
-            self.rebuild_and_redraw(terminal);
-            return None; // Stay open after navigating
-        }
-
-        if file_name == ".." {
-            // Parent directory selected - navigate up one level
-            if let Some(parent) = self.current_path.parent() {
-                self.current_path = parent.to_path_buf();
+            SelectionAction::Navigate(dir) => {
+                self.current_path = dir;
                 self.rebuild_and_redraw(terminal);
+                None
             }
-            None // Stay open after navigating
-        } else if file_name.starts_with('[') && file_name.ends_with(']') {
-            // Folder selected ([dirname]) - navigate into it
-            let dir_name = &file_name[1..file_name.len() - 1];
-            self.current_path.push(dir_name);
-            self.rebuild_and_redraw(terminal);
-            None // Stay open after navigating
-        } else {
-            // Regular file selected - close dialog with path
-            *self.file_name_data.borrow_mut() = file_name.to_string();
-            Some(self.current_path.join(file_name)) // Close dialog, return file path
+            SelectionAction::Refilter { dir, wildcard } => {
+                if let Some(dir) = dir {
+                    self.current_path = dir;
+                }
+                self.wildcard = wildcard;
+                self.rebuild_and_redraw(terminal);
+                None
+            }
+            SelectionAction::SelectFile(path) => {
+                // Navigate to the file's parent directory (relevant when the
+                // user typed a path like "src/main.rs" or an absolute path),
+                // and return the joined path as the selection.
+                if let Some(parent) = path.parent() {
+                    self.current_path = parent.to_path_buf();
+                }
+                let name = path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().to_string())
+                    .unwrap_or_else(|| file_name.to_string());
+                *self.file_name_data.borrow_mut() = name;
+                Some(path)
+            }
         }
     }
 
@@ -671,20 +756,15 @@ impl FileDialog {
     }
 
     fn matches_wildcard(&self, name: &str) -> bool {
-        // "*.*" means all files (common DOS/Windows pattern)
+        // "*.*" means all files (DOS/Windows convention), "*"/"" match all.
         if self.wildcard == "*.*" || self.wildcard == "*" || self.wildcard.is_empty() {
             return true;
         }
 
-        // Simple wildcard matching (*.ext)
-        if let Some(ext) = self.wildcard.strip_prefix("*.") {
-            // Check for the special case "*.* " which was already handled above
-            // For "*.rs", check if name ends with ".rs"
-            name.ends_with(&format!(".{}", ext))
-        } else {
-            // Contains matching (no wildcard, just substring)
-            name.contains(&self.wildcard)
-        }
+        // Proper glob matching with `*` and `?` anywhere in the pattern.
+        // A bare name with no wildcard characters is an exact match, not a
+        // substring filter.
+        glob_match(&self.wildcard, name)
     }
 
     pub fn get_selected_file(&self) -> Option<PathBuf> {
@@ -846,5 +926,161 @@ impl FileDialogBuilder {
 impl Default for FileDialogBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
+
+    #[test]
+    fn glob_star_matches_prefix_not_substring() {
+        assert!(glob_match("foo*", "foo.txt"));
+        assert!(glob_match("foo*", "foo"));
+        assert!(!glob_match("foo*", "xfoo"));
+        assert!(!glob_match("foo*", "xfoo.txt"));
+    }
+
+    #[test]
+    fn glob_question_mark_matches_single_char() {
+        assert!(glob_match("a?c.txt", "abc.txt"));
+        assert!(glob_match("a?c.txt", "axc.txt"));
+        assert!(!glob_match("a?c.txt", "ac.txt"));
+        assert!(!glob_match("a?c.txt", "abbc.txt"));
+    }
+
+    #[test]
+    fn glob_star_anywhere() {
+        assert!(glob_match("*.rs", "main.rs"));
+        assert!(!glob_match("*.rs", "main.rss"));
+        assert!(glob_match("a*b*c", "aXXbYYc"));
+        assert!(!glob_match("a*b*c", "aXXbYY"));
+        // Case-sensitive like the OS
+        assert!(!glob_match("*.RS", "main.rs"));
+    }
+
+    #[test]
+    fn bare_name_is_exact_match_not_substring() {
+        let dialog = FileDialog::new(Rect::new(0, 0, 60, 20), "t", "test", None);
+        assert!(dialog.matches_wildcard("test"));
+        assert!(!dialog.matches_wildcard("my_test.rs"));
+        assert!(!dialog.matches_wildcard("testing"));
+    }
+
+    #[test]
+    fn star_dot_star_matches_everything() {
+        let dialog = FileDialog::new(Rect::new(0, 0, 60, 20), "t", "*.*", None);
+        assert!(dialog.matches_wildcard("main.rs"));
+        assert!(dialog.matches_wildcard("Makefile"));
+    }
+
+    #[test]
+    fn classify_parent_and_bracket_dirs() {
+        let cur = Path::new("/base");
+        assert_eq!(
+            classify_selection(cur, ".."),
+            SelectionAction::NavigateParent
+        );
+        assert_eq!(
+            classify_selection(cur, "[src]"),
+            SelectionAction::Navigate(PathBuf::from("/base/src"))
+        );
+    }
+
+    #[test]
+    fn classify_wildcard_refilters() {
+        let cur = Path::new("/base");
+        assert_eq!(
+            classify_selection(cur, "*.rs"),
+            SelectionAction::Refilter {
+                dir: None,
+                wildcard: "*.rs".to_string()
+            }
+        );
+        // "dir/*.txt" navigates and refilters
+        assert_eq!(
+            classify_selection(cur, "src/*.txt"),
+            SelectionAction::Refilter {
+                dir: Some(PathBuf::from("/base/src/")),
+                wildcard: "*.txt".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn classify_existing_directory_navigates() {
+        let tmp = std::env::temp_dir();
+        let sub = tmp.join("tv_fd_test_dir");
+        std::fs::create_dir_all(&sub).unwrap();
+        let action = classify_selection(&tmp, "tv_fd_test_dir");
+        assert_eq!(action, SelectionAction::Navigate(sub.clone()));
+        let _ = std::fs::remove_dir(&sub);
+    }
+
+    #[test]
+    fn classify_typed_path_returns_file_not_navigation() {
+        // Typing "src/main.rs" must yield the FILE, not discard main.rs.
+        let cur = Path::new("/base");
+        assert_eq!(
+            classify_selection(cur, "src/main.rs"),
+            SelectionAction::SelectFile(PathBuf::from("/base/src/main.rs"))
+        );
+        // Absolute path keeps the file too.
+        assert_eq!(
+            classify_selection(cur, "/etc/hosts.bak"),
+            SelectionAction::SelectFile(PathBuf::from("/etc/hosts.bak"))
+        );
+    }
+
+    #[test]
+    fn handle_selection_typed_path_returns_joined_path() {
+        // End-to-end through handle_selection with a real temp tree:
+        // typing "sub/file.txt" returns the file and navigates to its parent.
+        let tmp = std::env::temp_dir().join("tv_fd_test_sel");
+        let sub = tmp.join("sub");
+        std::fs::create_dir_all(&sub).unwrap();
+        std::fs::write(sub.join("file.txt"), b"x").unwrap();
+
+        struct NullBackend;
+        impl crate::terminal::Backend for NullBackend {
+            fn init(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn cleanup(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn size(&self) -> std::io::Result<(u16, u16)> {
+                Ok((80, 25))
+            }
+            fn poll_event(
+                &mut self,
+                _timeout: std::time::Duration,
+            ) -> std::io::Result<Option<Event>> {
+                Ok(None)
+            }
+            fn write_raw(&mut self, _data: &[u8]) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn show_cursor(&mut self, _x: u16, _y: u16) -> std::io::Result<()> {
+                Ok(())
+            }
+            fn hide_cursor(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+
+        let mut dialog =
+            FileDialog::new(Rect::new(0, 0, 60, 20), "t", "*", Some(tmp.clone())).build();
+        let mut terminal = Terminal::with_backend(Box::new(NullBackend)).unwrap();
+        let result = dialog.handle_selection("sub/file.txt", &mut terminal);
+        assert_eq!(result, Some(sub.join("file.txt")));
+        assert_eq!(dialog.get_current_directory(), sub);
+        assert_eq!(*dialog.file_name_data.borrow(), "file.txt");
+
+        let _ = std::fs::remove_dir_all(&tmp);
     }
 }

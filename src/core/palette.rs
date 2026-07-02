@@ -38,8 +38,9 @@ pub const LISTBOX_DIVIDER: u8 = 4; // Divider line
 // Cluster (CheckBox/RadioButton) palette indices (maps to CP_CLUSTER)
 pub const CLUSTER_NORMAL: u8 = 1; // Normal item
 pub const CLUSTER_FOCUSED: u8 = 2; // Focused cluster
-pub const CLUSTER_SHORTCUT: u8 = 3; // Shortcut letter
-pub const CLUSTER_DISABLED: u8 = 4; // Disabled item
+pub const CLUSTER_SHORTCUT: u8 = 3; // Shortcut letter (normal)
+pub const CLUSTER_SHORTCUT_SELECTED: u8 = 4; // Shortcut letter (selected)
+pub const CLUSTER_DISABLED: u8 = 5; // Disabled item (Borland cpCluster position 5)
 
 // Label palette indices (maps to CP_LABEL)
 pub const LABEL_NORMAL: u8 = 1; // Normal label text
@@ -574,12 +575,14 @@ pub mod palettes {
     #[rustfmt::skip]
     pub const CP_APP_COLOR: &[u8] = &[
         0x71, 0x70, 0x78, 0x74, 0x20, 0x28, 0x24, 0x17, // 1-8: Desktop colors
-        0x1F, 0x1A, 0x31, 0x31, 0x1E, 0x71, 0x00,       // 9-15: Menu colors
+        0x1F, 0x1A, 0x31, 0x31, 0x1E, 0x71, 0x1F,       // 9-15: Menu colors (15: Borland 0x1F)
         // 16-23: Cyan Window
         // Note: Index 16 changed from Borland's 0x37 (light gray on cyan) to 0x30 (black on cyan)
         // for better readability on modern terminals where light gray on cyan has poor contrast
-        0x30, 0x3F, 0x3A, 0x13, 0x13, 0x3E, 0x21, 0x00,
-        0x70, 0x7F, 0x7A, 0x13, 0x13, 0x70, 0x7F, 0x00, // 24-31: Gray Window
+        // Index 23 restored to Borland's 0x3F (was accidentally zeroed).
+        0x30, 0x3F, 0x3A, 0x13, 0x13, 0x3E, 0x21, 0x3F,
+        // 24-31: Gray Window (31 restored to Borland's 0x7E; was accidentally zeroed)
+        0x70, 0x7F, 0x7A, 0x13, 0x13, 0x70, 0x7F, 0x7E,
         0x70, 0x7F, 0x7A, 0x13, 0x13, 0x70, 0x70, 0x7F, // 32-39: Dialog (Frame, StaticText, Label, etc.)
         0x7E, 0x20, 0x2B, 0x2F, 0x78, 0x2E, 0x70, 0x30, // 40-47: Dialog (controls)
         0x3F, 0x3E, 0x1F, 0x2F, 0x1A, 0x20, 0x72, 0x31, // 48-55: Dialog (InputLine, Button, etc.)
@@ -596,6 +599,14 @@ pub mod palettes {
         // 1: Frame passive, 2: Frame active, 3: Frame icon, 4: ScrollBar page
         // 5: ScrollBar arrows, 6: Normal text, 7: Selected text, 8: Reserved
         0x07, 0x0F, 0x0A, 0x08, 0x08, 0x0F, 0x07, 0x00,
+        // 105-136: Blue Dialog (Borland cpAppColor 64-95, moved here because this
+        // port repurposed app entries 64-96 for syntax-highlighting colors).
+        // CP_BLUE_DIALOG maps its 32 entries into this region.
+        // Note: entry 136 (Borland 95) is 0x00 in Borland too (reserved).
+        0x17, 0x1F, 0x1A, 0x71, 0x71, 0x1E, 0x17, 0x1F, // 105-112: Frame/StaticText/Label
+        0x1E, 0x20, 0x2B, 0x2F, 0x78, 0x2E, 0x10, 0x30, // 113-120: Label/Button/Cluster
+        0x3F, 0x3E, 0x70, 0x2F, 0x7A, 0x20, 0x12, 0x31, // 121-128: InputLine/History/List
+        0x31, 0x30, 0x2F, 0x3E, 0x31, 0x13, 0x38, 0x00, // 129-136: InfoPane etc. (136 reserved)
     ];
 
     // Window palettes - map window color indices to app palette
@@ -629,13 +640,18 @@ pub mod palettes {
         62, 63,                                   // 31-32
     ];
 
-    // Blue dialog palette - maps dialog color indices to app palette
+    // Blue dialog palette - maps dialog color indices to app palette.
+    // Borland cpBlueDialog maps to app entries 64-95, but this port uses 64-96
+    // for syntax-highlighting colors, so the Borland blue-dialog attribute block
+    // was appended to CP_APP_COLOR at positions 105-136 instead (same values,
+    // relocated). This keeps blue dialogs rendering with blue backgrounds without
+    // disturbing the syntax-color region.
     #[rustfmt::skip]
     pub const CP_BLUE_DIALOG: &[u8] = &[
-        16, 17, 18, 19, 20, 21, 22, 23, 24, 25,  // 1-10
-        26, 27, 28, 29, 30, 31, 32, 33, 34, 35,  // 11-20
-        36, 37, 38, 39, 40, 41, 42, 43, 44, 45,  // 21-30
-        46, 47,                                   // 31-32
+        105, 106, 107, 108, 109, 110, 111, 112, 113, 114,  // 1-10
+        115, 116, 117, 118, 119, 120, 121, 122, 123, 124,  // 11-20
+        125, 126, 127, 128, 129, 130, 131, 132, 133, 134,  // 21-30
+        135, 136,                                           // 31-32
     ];
 
     // Button palette - from Borland cpButton "\x0A\x0B\x0C\x0D\x0E\x0E\x0E\x0F"
@@ -685,9 +701,10 @@ pub mod palettes {
     ];
 
     // Cluster palette (CheckBox, RadioButton)
+    // Borland cpCluster = "\x10\x11\x12\x12\x1f" (16, 17, 18, 18, 31)
     #[rustfmt::skip]
     pub const CP_CLUSTER: &[u8] = &[
-        16, 17, 18, 19,  // 1-4: Normal, focused, shortcut, disabled
+        16, 17, 18, 18, 31,  // 1-5: Normal, selected, shortcut, shortcut selected, disabled
     ];
 
     // StatusLine palette
@@ -766,4 +783,72 @@ pub mod palettes {
     pub const CP_BACKGROUND: &[u8] = &[
         1,  // 1: Background color (maps to app palette position 1)
     ];
+}
+
+#[cfg(test)]
+mod tests {
+    use super::palettes::*;
+    use super::*;
+
+    /// Resolves a 1-based app palette index to its attribute byte.
+    fn app(index: u8) -> u8 {
+        CP_APP_COLOR[index as usize - 1]
+    }
+
+    #[test]
+    fn app_palette_restored_borland_bytes() {
+        // Positions 15, 23, 31 were accidentally zeroed; Borland cpAppColor
+        // has 0x1F, 0x3F, 0x7E at those positions.
+        assert_eq!(app(15), 0x1F);
+        assert_eq!(app(23), 0x3F);
+        assert_eq!(app(31), 0x7E);
+    }
+
+    #[test]
+    fn blue_dialog_maps_to_blue_backgrounds() {
+        // CP_BLUE_DIALOG entry 1 (frame passive) must resolve to a blue
+        // background (Borland 0x17: light gray on blue).
+        let frame = app(CP_BLUE_DIALOG[0]);
+        assert_eq!(frame, 0x17);
+        assert_eq!(Attr::from_u8(frame).bg, TvColor::Blue);
+
+        // Entry 2 (frame active) is 0x1F: white on blue.
+        let active = app(CP_BLUE_DIALOG[1]);
+        assert_eq!(active, 0x1F);
+        assert_eq!(Attr::from_u8(active).bg, TvColor::Blue);
+
+        // All CP_BLUE_DIALOG targets must be within the app palette.
+        for &idx in CP_BLUE_DIALOG {
+            assert!((idx as usize) <= CP_APP_COLOR.len());
+        }
+        // And they must not collide with the syntax-color region (64-96).
+        for &idx in CP_BLUE_DIALOG {
+            assert!(idx < 64 || idx > 96);
+        }
+    }
+
+    #[test]
+    fn blue_dialog_matches_borland_values() {
+        // The relocated region must carry Borland cpBlueDialog's attribute
+        // bytes (Borland app entries 64-95).
+        let borland: [u8; 32] = [
+            0x17, 0x1F, 0x1A, 0x71, 0x71, 0x1E, 0x17, 0x1F, 0x1E, 0x20, 0x2B, 0x2F, 0x78, 0x2E,
+            0x10, 0x30, 0x3F, 0x3E, 0x70, 0x2F, 0x7A, 0x20, 0x12, 0x31, 0x31, 0x30, 0x2F, 0x3E,
+            0x31, 0x13, 0x38, 0x00,
+        ];
+        for (i, &idx) in CP_BLUE_DIALOG.iter().enumerate() {
+            assert_eq!(app(idx), borland[i], "blue dialog entry {}", i + 1);
+        }
+    }
+
+    #[test]
+    fn cluster_palette_matches_borland() {
+        // Borland cpCluster = "\x10\x11\x12\x12\x1f"
+        assert_eq!(CP_CLUSTER, &[16, 17, 18, 18, 31]);
+        // The disabled entry resolves through the (restored) app entry 31.
+        assert_eq!(app(CP_CLUSTER[CLUSTER_DISABLED as usize - 1]), 0x7E);
+        // Out-of-range indices still hit the Palette::get() fallback.
+        let pal = Palette::from_slice(CP_CLUSTER);
+        assert_eq!(pal.get(6), 0);
+    }
 }

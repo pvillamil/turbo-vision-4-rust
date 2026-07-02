@@ -56,6 +56,19 @@ pub trait Validator {
         0
     }
 
+    /// Ask the validator for an auto-filled/transformed version of `text`.
+    ///
+    /// Called by InputLine after a character has been accepted and inserted,
+    /// mirroring Borland's `TInputLine::checkValid(False)` which lets picture
+    /// validators auto-insert literal characters (typing "12" against mask
+    /// "##/##" becomes "12/") and force uppercase for `&`/`!` positions.
+    ///
+    /// Returns `Some(new_text)` when the text should be replaced, or `None`
+    /// when no transformation applies (the default).
+    fn complete(&self, _text: &str) -> Option<String> {
+        None
+    }
+
     /// Validate and show error if invalid
     /// Matches Borland's TValidator::Valid() (tvalidat.cc:43-48)
     fn valid(&self, input: &str) -> bool {
