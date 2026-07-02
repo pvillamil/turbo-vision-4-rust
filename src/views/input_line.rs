@@ -22,13 +22,25 @@ const KB_CTRL_C: u16 = 0x0003; // Ctrl+C - Copy
 const KB_CTRL_V: u16 = 0x0016; // Ctrl+V - Paste
 const KB_CTRL_X: u16 = 0x0018; // Ctrl+X - Cut
 
+/// Converts a char index into a byte offset, clamping to the end of `text`.
+fn byte_offset(text: &str, char_idx: usize) -> usize {
+    text.char_indices()
+        .nth(char_idx)
+        .map_or(text.len(), |(i, _)| i)
+}
+
+/// Counts the characters in `text`.
+fn char_len(text: &str) -> usize {
+    text.chars().count()
+}
+
 pub struct InputLine {
     bounds: Rect,
     data: Rc<RefCell<String>>,
-    cursor_pos: usize,
-    max_length: usize,
-    sel_start: usize,                // Selection start position
-    sel_end: usize,                  // Selection end position
+    cursor_pos: usize,               // Cursor position in characters (not bytes)
+    max_length: usize,               // Maximum length in characters
+    sel_start: usize,                // Selection start position (characters)
+    sel_end: usize,                  // Selection end position (characters)
     first_pos: usize,                // First visible character position for horizontal scrolling
     validator: Option<ValidatorRef>, // Optional validator for input validation
     state: StateFlags,               // View state flags (including SF_FOCUSED)
@@ -37,7 +49,7 @@ pub struct InputLine {
 
 impl InputLine {
     pub fn new(bounds: Rect, max_length: usize, data: Rc<RefCell<String>>) -> Self {
-        let cursor_pos = data.borrow().len();
+        let cursor_pos = char_len(&data.borrow());
         Self {
             bounds,
             data,
@@ -82,7 +94,7 @@ impl InputLine {
 
     pub fn set_text(&mut self, text: String) {
         *self.data.borrow_mut() = text;
-        self.cursor_pos = self.data.borrow().len();
+        self.cursor_pos = char_len(&self.data.borrow());
         self.sel_start = 0;
         self.sel_end = 0;
         self.first_pos = 0;
@@ -96,7 +108,7 @@ impl InputLine {
 
     /// Select all text
     pub fn select_all(&mut self) {
-        let len = self.data.borrow().len();
+        let len = char_len(&self.data.borrow());
         self.sel_start = 0;
         self.sel_end = len;
         self.cursor_pos = len;
@@ -113,8 +125,8 @@ impl InputLine {
             return None;
         }
         let text = self.data.borrow();
-        let start = self.sel_start.min(self.sel_end);
-        let end = self.sel_start.max(self.sel_end);
+        let start = byte_offset(&text, self.sel_start.min(self.sel_end));
+        let end = byte_offset(&text, self.sel_start.max(self.sel_end));
         Some(text[start..end].to_string())
     }
 
@@ -127,7 +139,9 @@ impl InputLine {
         let end = self.sel_start.max(self.sel_end);
 
         let mut text = self.data.borrow_mut();
-        text.replace_range(start..end, "");
+        let byte_start = byte_offset(&text, start);
+        let byte_end = byte_offset(&text, end);
+        text.replace_range(byte_start..byte_end, "");
         drop(text);
 
         self.cursor_pos = start;
@@ -183,9 +197,9 @@ impl View for InputLine {
 
         buf.move_char(0, ' ', attr, width);
 
-        // Get text and calculate visible portion
+        // Get text and calculate visible portion (all positions in characters)
         let text = self.data.borrow();
-        let text_len = text.len();
+        let text_len = char_len(&text);
 
         // Calculate visible range
         let visible_start = self.first_pos;
@@ -193,7 +207,9 @@ impl View for InputLine {
 
         // Draw text
         if visible_start < text_len {
-            let visible_text = &text[visible_start..visible_end];
+            let byte_start = byte_offset(&text, visible_start);
+            let byte_end = byte_offset(&text, visible_end);
+            let visible_text = &text[byte_start..byte_end];
 
             // If there's a selection, draw it with selection color
             if self.has_selection() {
@@ -241,7 +257,7 @@ impl View for InputLine {
                 if !self.is_focused() {
                     // The data has already been updated by FileDialog
                     // Just need to update our cursor position and clear selection
-                    self.cursor_pos = self.data.borrow().len();
+                    self.cursor_pos = char_len(&self.data.borrow());
                     self.sel_start = 0;
                     self.sel_end = 0;
                     self.first_pos = 0;
@@ -265,7 +281,8 @@ impl View for InputLine {
                     } else if self.cursor_pos > 0 {
                         {
                             let mut text = self.data.borrow_mut();
-                            text.remove(self.cursor_pos - 1);
+                            let at = byte_offset(&text, self.cursor_pos - 1);
+                            text.remove(at);
                         }
                         self.cursor_pos -= 1;
                         self.make_cursor_visible();
@@ -277,9 +294,10 @@ impl View for InputLine {
                         self.delete_selection();
                         self.make_cursor_visible();
                         event.clear();
-                    } else if self.cursor_pos < self.data.borrow().len() {
+                    } else if self.cursor_pos < char_len(&self.data.borrow()) {
                         let mut text = self.data.borrow_mut();
-                        text.remove(self.cursor_pos);
+                        let at = byte_offset(&text, self.cursor_pos);
+                        text.remove(at);
                         event.clear();
                     }
                 }
@@ -293,7 +311,7 @@ impl View for InputLine {
                     }
                 }
                 KB_RIGHT => {
-                    if self.cursor_pos < self.data.borrow().len() {
+                    if self.cursor_pos < char_len(&self.data.borrow()) {
                         self.cursor_pos += 1;
                         self.sel_start = 0;
                         self.sel_end = 0;
@@ -309,7 +327,7 @@ impl View for InputLine {
                     event.clear();
                 }
                 KB_END => {
-                    self.cursor_pos = self.data.borrow().len();
+                    self.cursor_pos = char_len(&self.data.borrow());
                     self.sel_start = 0;
                     self.sel_end = 0;
                     self.make_cursor_visible();
@@ -348,18 +366,17 @@ impl View for InputLine {
                             self.delete_selection();
                         }
 
-                        // Insert clipboard text at cursor position
+                        // Insert clipboard text at cursor position (truncated to fit,
+                        // counting characters so multibyte input can't split)
                         {
                             let mut text = self.data.borrow_mut();
-                            let remaining_space = self.max_length.saturating_sub(text.len());
-                            let insert_text = if clipboard_text.len() <= remaining_space {
-                                clipboard_text.as_str()
-                            } else {
-                                &clipboard_text[..remaining_space]
-                            };
+                            let remaining_space = self.max_length.saturating_sub(char_len(&text));
+                            let cut = byte_offset(&clipboard_text, remaining_space);
+                            let insert_text = &clipboard_text[..cut];
 
-                            text.insert_str(self.cursor_pos, insert_text);
-                            self.cursor_pos += insert_text.len();
+                            let at = byte_offset(&text, self.cursor_pos);
+                            text.insert_str(at, insert_text);
+                            self.cursor_pos += char_len(insert_text);
                         }
                         self.make_cursor_visible();
                     }
@@ -373,7 +390,7 @@ impl View for InputLine {
                             self.delete_selection();
                         }
 
-                        let text_len = self.data.borrow().len();
+                        let text_len = char_len(&self.data.borrow());
                         if text_len < self.max_length {
                             let ch = key_code as u8 as char;
 
@@ -382,7 +399,8 @@ impl View for InputLine {
                             if let Some(ref validator) = self.validator {
                                 // Create test string with new character
                                 let mut test_text = self.data.borrow().clone();
-                                test_text.insert(self.cursor_pos, ch);
+                                let at = byte_offset(&test_text, self.cursor_pos);
+                                test_text.insert(at, ch);
 
                                 // Check if valid input during typing
                                 if !validator.borrow().is_valid_input(&test_text, true) {
@@ -395,7 +413,8 @@ impl View for InputLine {
                             // Character is valid, insert it
                             {
                                 let mut text = self.data.borrow_mut();
-                                text.insert(self.cursor_pos, ch);
+                                let at = byte_offset(&text, self.cursor_pos);
+                                text.insert(at, ch);
                             }
                             self.cursor_pos += 1;
                             self.make_cursor_visible();
@@ -549,5 +568,59 @@ impl InputLineBuilder {
 impl Default for InputLineBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::event::{KB_BACKSPACE, KB_DEL, KB_LEFT};
+
+    fn make(text: &str) -> (InputLine, Rc<RefCell<String>>) {
+        let data = Rc::new(RefCell::new(text.to_string()));
+        let mut input = InputLine::new(Rect::new(0, 0, 20, 1), 10, data.clone());
+        input.set_focus(true);
+        (input, data)
+    }
+
+    #[test]
+    fn multibyte_backspace_and_delete_do_not_panic() {
+        // Regression: cursor positions were byte offsets, panicking on "é"
+        let (mut input, data) = make("héllo");
+        let mut ev = Event::keyboard(KB_LEFT);
+        input.handle_event(&mut ev);
+        let mut ev = Event::keyboard(KB_BACKSPACE);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "hélo");
+
+        let mut ev = Event::keyboard(KB_LEFT);
+        input.handle_event(&mut ev);
+        let mut ev = Event::keyboard(KB_DEL);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "héo");
+    }
+
+    #[test]
+    fn multibyte_selection_and_typing() {
+        let (mut input, data) = make("héé");
+        input.select_all();
+        assert_eq!(input.get_selection().as_deref(), Some("héé"));
+
+        // Typing over the selection replaces it, at char boundaries
+        let mut ev = Event::keyboard('x' as u16);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "x");
+    }
+
+    #[test]
+    fn paste_truncates_by_characters() {
+        // max_length 10; pasting 12 chars of multibyte text must cut at a
+        // char boundary, not mid-code-point
+        let (mut input, data) = make("");
+        crate::core::clipboard::set_clipboard("éééééééééééé");
+        let mut ev = Event::keyboard(0x0016); // Ctrl+V
+        input.handle_event(&mut ev);
+        assert_eq!(data.borrow().chars().count(), 10);
+        assert!(data.borrow().chars().all(|c| c == 'é'));
     }
 }

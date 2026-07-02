@@ -396,22 +396,25 @@ impl Memo {
             }
 
             let line = &self.lines[y as usize];
+            // Selection columns are character positions; take/skip by chars so
+            // multibyte lines can't split a code point
+            let line_chars = line.chars().count();
             if y == start.y && y == end.y {
                 // Single line selection
                 let s = start.x.max(0) as usize;
-                let e = end.x.min(line.len() as i16) as usize;
+                let e = (end.x.min(line_chars as i16)) as usize;
                 if s < e {
-                    result.push_str(&line[s..e]);
+                    result.extend(line.chars().skip(s).take(e - s));
                 }
             } else if y == start.y {
                 // First line
                 let s = start.x.max(0) as usize;
-                result.push_str(&line[s..]);
+                result.extend(line.chars().skip(s));
                 result.push('\n');
             } else if y == end.y {
                 // Last line
-                let e = end.x.min(line.len() as i16) as usize;
-                result.push_str(&line[..e]);
+                let e = (end.x.min(line_chars as i16)) as usize;
+                result.extend(line.chars().take(e));
             } else {
                 // Middle lines
                 result.push_str(line);
@@ -846,6 +849,16 @@ mod tests {
         assert_eq!(memo.line_count(), 3);
         assert_eq!(memo.get_text(), "Line 1\nLine 2\nLine 3");
         assert!(!memo.is_modified());
+    }
+
+    #[test]
+    fn get_selection_is_char_safe_on_multibyte_lines() {
+        // Regression: selection columns were used as byte indices
+        let mut memo = Memo::new(Rect::new(0, 0, 40, 10));
+        memo.set_text("héllo wörld");
+        memo.selection_start = Some(Point::new(1, 0));
+        memo.cursor = Point::new(4, 0);
+        assert_eq!(memo.get_selection().as_deref(), Some("\u{e9}ll"));
     }
 
     #[test]

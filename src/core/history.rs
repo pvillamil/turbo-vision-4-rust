@@ -226,6 +226,17 @@ impl HistoryManager {
     }
 }
 
+/// Serializes tests that touch the process-global HistoryManager.
+///
+/// Tests in several modules call `clear_all()` and assert on global counts;
+/// without this lock they race under the parallel test runner.
+#[cfg(test)]
+pub(crate) fn test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static LOCK: Mutex<()> = Mutex::new(());
+    LOCK.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -284,6 +295,7 @@ mod tests {
     #[test]
     fn test_history_manager() {
         // Clear all first to avoid test interference
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
 
         let history_id = 100;
@@ -309,6 +321,7 @@ mod tests {
 
     #[test]
     fn test_history_manager_multiple_lists() {
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
 
         HistoryManager::add(1, "list1_item1".to_string());

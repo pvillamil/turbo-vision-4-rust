@@ -330,18 +330,15 @@ impl View for TerminalWidget {
                 let line = &self.lines[line_idx];
                 let color = line.attr.unwrap_or(default_color);
 
-                // Truncate or pad line to fit width
-                let text = if line.text.len() > visible_width {
-                    &line.text[..visible_width]
-                } else {
-                    &line.text
-                };
+                // Truncate or pad line to fit width (character-wise for multibyte safety)
+                let text: String = line.text.chars().take(visible_width).collect();
+                let text_len = text.chars().count();
 
-                buf.move_str(0, text, color);
+                buf.move_str(0, &text, color);
 
                 // Fill rest with spaces
-                if text.len() < visible_width {
-                    buf.move_char(text.len(), ' ', color, visible_width - text.len());
+                if text_len < visible_width {
+                    buf.move_char(text_len, ' ', color, visible_width - text_len);
                 }
             } else {
                 // Empty line

@@ -121,14 +121,10 @@ impl View for ParamText {
             let mut buf = DrawBuffer::new(width);
             buf.move_char(0, ' ', normal_attr, width);
 
-            // Truncate line if too long
-            let display_text = if line.len() > width {
-                &line[..width]
-            } else {
-                line
-            };
+            // Truncate line if too long (by characters, so multibyte text can't split)
+            let display_text: String = line.chars().take(width).collect();
 
-            buf.move_str(0, display_text, normal_attr);
+            buf.move_str(0, &display_text, normal_attr);
             write_line_to_terminal(terminal, self.bounds.a.x, self.bounds.a.y + i as i16, &buf);
         }
 

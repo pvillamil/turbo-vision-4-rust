@@ -193,6 +193,7 @@ mod tests {
     #[test]
     fn test_history_viewer_creation() {
         // Clear and add test data
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
         HistoryManager::add(1, "test1".to_string());
         HistoryManager::add(1, "test2".to_string());
@@ -204,6 +205,7 @@ mod tests {
 
     #[test]
     fn test_history_viewer_refresh() {
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
         HistoryManager::add(2, "item1".to_string());
 
@@ -220,6 +222,7 @@ mod tests {
 
     #[test]
     fn test_history_viewer_empty() {
+        let _guard = crate::core::history::test_lock();
         HistoryManager::clear_all();
 
         let viewer = HistoryViewer::new(Rect::new(0, 0, 20, 10), 99);
