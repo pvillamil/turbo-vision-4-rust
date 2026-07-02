@@ -38,7 +38,7 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 - [x] Per-child grow modes (GF_GROW_*) with Borland calcBounds semantics; default fixed
 - [x] `SF_ACTIVE` propagates via Window::set_focus to window + frame; inactive palette now used
 - [x] Auto-close honors `valid(cmClose)` — children can veto
-- [ ] Modal loop tracks view by index, not identity (`application.rs:311`); `valid(endState)` re-entry missing (`group.rs:284` TODO)
+- [x] Modal views tracked by ViewId; `valid(endState)` re-entry in Group/Dialog execute; InputLine validators can veto OK
 - [ ] Command IDs diverge from Borland (`CM_QUIT=24` vs `cmQuit=1` etc.) — fix or document and drop "100% parity" claim
 - [x] PictureValidator is a full TPXPictureValidator port (incl. groups/repetition/alternatives); auto-fill wired into InputLine typing via Validator::complete()
 - [x] File dialog follows Borland's wildcard→dir→file order (typed paths return the file); real glob matching (`*`/`?`)
@@ -59,7 +59,7 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 - [ ] Scroller `set_limit` semantics off by a page; no scrollbar auto-repeat; full thumb when nothing to scroll
 - [ ] `CommandSet::enable_range(n, n)` silent no-op — `command_set.rs:206/244`; `init_command_set` disables only CM_CLOSE
 - [ ] Quit during modal returns `CM_CANCEL` instead of `cmQuit` — `application.rs:345`
-- [ ] Frame: title not centered; close fires on bare MouseUp without press tracking
+- [ ] Frame: title not centered (close-button press tracking fixed in P1)
 - [ ] InputLine: no select-all-on-focus, no shift-selection or Ins mode; `max_length` off-by-one
 - [ ] `set_esc_timeout` is a silent no-op — `terminal/mod.rs:318`
 - [ ] History/clipboard global mutexes `.lock().unwrap()` — poison cascades
