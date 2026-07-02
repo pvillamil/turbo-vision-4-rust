@@ -32,18 +32,18 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 
 ## P1 — High (visible divergence from C++)
 
-- [ ] Enter fires static default button, not focused one — `cmGrabDefault`/`cmReleaseDefault` unported (`dialog.rs:277`, `button.rs`)
-- [ ] Disabled commands still fire: status-line keyboard path (`status_line.rs:256`), MenuBox Enter/mouse (`menu_box.rs:326-402`)
-- [ ] Mouse clicks outside any child delivered to focused child — `group.rs:645-669`; Frame close-button MouseDown doesn't clear event (`frame.rs:232`)
-- [ ] No per-child `growMode` — resize stretches every child (`group.rs:435-458`)
-- [ ] `SF_ACTIVE` never propagated — inactive windows draw as active (`frame.rs:52`, `window.rs:668`)
-- [ ] Non-modal close skips `valid(cmClose)` by default (`window.rs:643`)
+- [x] Enter presses the focused button; `am_default` grab/release on focus change; CM_GRAB/RELEASE_DEFAULT fixed to Borland 61/62
+- [x] Disabled commands no longer fire from status line (key + mouse) or MenuBox (Enter + mouse); disabled-selected menu items draw dimmed
+- [x] Positional events hitting no child are dropped; Frame close button tracks press+release on the icon
+- [x] Per-child grow modes (GF_GROW_*) with Borland calcBounds semantics; default fixed
+- [x] `SF_ACTIVE` propagates via Window::set_focus to window + frame; inactive palette now used
+- [x] Auto-close honors `valid(cmClose)` — children can veto
 - [ ] Modal loop tracks view by index, not identity (`application.rs:311`); `valid(endState)` re-entry missing (`group.rs:284` TODO)
 - [ ] Command IDs diverge from Borland (`CM_QUIT=24` vs `cmQuit=1` etc.) — fix or document and drop "100% parity" claim
-- [ ] Picture validator mask chars wrong vs Borland; auto-fill never wired — `picture_validator.rs:75`, `input_line.rs:388`
-- [ ] File dialog: typed path with `/` navigates instead of returning file (`file_dialog.rs:499-516`); wildcards are substring, not glob (`file_dialog.rs:673`)
-- [ ] Menu dropdown hit-testing hardcodes width 20 — `menu_bar.rs:527/574/787`
-- [ ] `CP_BLUE_DIALOG` maps into wrong palette region; app-palette bytes 15/23/31 zeroed; `CP_CLUSTER` 4th entry off — `palette.rs`
+- [x] PictureValidator is a full TPXPictureValidator port (incl. groups/repetition/alternatives); auto-fill wired into InputLine typing via Validator::complete()
+- [x] File dialog follows Borland's wildcard→dir→file order (typed paths return the file); real glob matching (`*`/`?`)
+- [x] Dropdown hit-testing uses the real rendered width (shared dropdown_width helper)
+- [x] Palette repairs: zeroed app bytes restored, CP_BLUE_DIALOG points at a restored Borland blue region, CP_CLUSTER matches Borland
 
 ## P2 — Medium (feature gaps / semantic drift)
 
@@ -53,7 +53,8 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 - [ ] Indicator shows `col x row` vs Borland `row:col` — `indicator.rs:66`
 - [ ] Missing: `putEvent` slot, Alt+1-9 window select, window numbers, `cmZoom`/`cmResize` dispatch, zoom icon, keyboard move/resize, status-line `update()` on idle, `StatusDef` switching
 - [ ] Status line sees events last instead of first; app hard-codes Alt+X/F1/F12 — `application.rs:476-522`
-- [ ] Focus chain ignores `SF_DISABLED`/`SF_VISIBLE`; broadcasts stop at first consumer; `Group::remove` of focused child leaves nothing focused
+- [ ] Focus chain ignores `SF_DISABLED`/`SF_VISIBLE` in select_next/previous
+- [x] Broadcasts delivered to all children; focus re-established after removing the focused child
 - [ ] Desktop cascade/tile geometry differs from Borland; skip `tileError` and `sfVisible` checks — `desktop.rs:283-384`
 - [ ] Scroller `set_limit` semantics off by a page; no scrollbar auto-repeat; full thumb when nothing to scroll
 - [ ] `CommandSet::enable_range(n, n)` silent no-op — `command_set.rs:206/244`; `init_command_set` disables only CM_CLOSE
