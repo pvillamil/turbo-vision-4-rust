@@ -31,7 +31,7 @@ pub const KB_F9: KeyCode = 0x4300;
 pub const KB_F10: KeyCode = 0x4400;
 pub const KB_F11: KeyCode = 0x8500;
 pub const KB_F12: KeyCode = 0x8600; // F12 for ASCII screen dump
-pub const KB_CTRL_F12: KeyCode = 0x8602; // Ctrl+F12 for PNG screenshot
+pub const KB_CTRL_F12: KeyCode = 0x8A00; // Ctrl+F12 (Borland/BIOS kbCtrlF12) — bound to PNG screenshot
 
 // Arrow keys
 pub const KB_UP: KeyCode = 0x4800;
