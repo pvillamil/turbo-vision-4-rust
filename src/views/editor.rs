@@ -402,102 +402,68 @@ impl EditorWindow {
             return None;
         }
 
-        // Move cursor forward to find next occurrence
+        // The cursor already sits just past the previous match, so searching
+        // from it finds the next occurrence without skipping adjacent matches
         if self.selection_start.is_some() {
-            // If there's a selection, start after it
-            self.cursor.x += 1;
             self.selection_start = None;
         }
 
         self.find_from_cursor(&self.last_search.clone(), self.last_search_options)
     }
 
-    /// Find text starting from current cursor position
+    /// Find text starting from current cursor position.
+    ///
+    /// Searches forward to the end of the document without wrapping, matching
+    /// Borland's TEditor::search(). All column arithmetic is done in character
+    /// space so multibyte lines can't misalign or panic. Case folding is done
+    /// per character (first lowercase mapping) to keep columns 1:1.
     fn find_from_cursor(&mut self, text: &str, options: SearchOptions) -> Option<Point> {
-        let search_text = if options.case_sensitive {
-            text.to_string()
-        } else {
-            text.to_lowercase()
+        let case_sensitive = options.case_sensitive;
+        let fold = move |ch: char| {
+            if case_sensitive {
+                ch
+            } else {
+                ch.to_lowercase().next().unwrap_or(ch)
+            }
         };
+        let needle: Vec<char> = text.chars().map(fold).collect();
+        if needle.is_empty() {
+            return None;
+        }
 
-        // Helper to check if a character is a word character
         let is_word_char = |ch: char| ch.is_alphanumeric() || ch == '_';
 
-        // Start searching from current cursor position
         let start_line = self.cursor.y as usize;
         let start_col = self.cursor.x as usize;
 
-        // Search from cursor to end of document
         for (line_idx, line) in self.lines.iter().enumerate().skip(start_line) {
-            let search_line = if options.case_sensitive {
-                line.clone()
-            } else {
-                line.to_lowercase()
-            };
+            let chars: Vec<char> = line.chars().collect();
+            let from = if line_idx == start_line { start_col } else { 0 };
 
-            let col_start = if line_idx == start_line { start_col } else { 0 };
+            let mut col = from;
+            while col + needle.len() <= chars.len() {
+                let matched = chars[col..col + needle.len()]
+                    .iter()
+                    .map(|&c| fold(c))
+                    .eq(needle.iter().copied());
 
-            if col_start < line.len() {
-                if let Some(col) = search_line[col_start..].find(&search_text) {
-                    let found_col = col_start + col;
-
+                if matched {
                     // Check whole-word constraint (Borland: efWholeWordsOnly)
-                    if options.whole_words_only {
-                        let before_ok = found_col == 0
-                            || !is_word_char(line.chars().nth(found_col - 1).unwrap_or(' '));
-                        let after_idx = found_col + text.len();
-                        let after_ok = after_idx >= line.len()
-                            || !is_word_char(line.chars().nth(after_idx).unwrap_or(' '));
+                    let after = col + needle.len();
+                    let whole_ok = !options.whole_words_only
+                        || ((col == 0 || !is_word_char(chars[col - 1]))
+                            && (after >= chars.len() || !is_word_char(chars[after])));
 
-                        if !before_ok || !after_ok {
-                            continue; // Not a whole word match, keep searching
-                        }
-                    }
-
-                    let pos = Point::new(found_col as i16, line_idx as i16);
-                    // Set selection to highlight the found text
-                    self.selection_start = Some(pos);
-                    self.cursor =
-                        Point::new((found_col + text.chars().count()) as i16, line_idx as i16);
-                    self.make_cursor_visible();
-                    return Some(pos);
-                }
-            }
-        }
-
-        // Wrap around: search from beginning to cursor (Borland wraps by default)
-        for (line_idx, line) in self.lines.iter().enumerate().take(start_line + 1) {
-            let search_line = if options.case_sensitive {
-                line.clone()
-            } else {
-                line.to_lowercase()
-            };
-
-            let col_end = if line_idx == start_line {
-                start_col
-            } else {
-                line.len()
-            };
-
-            if let Some(col) = search_line[..col_end].find(&search_text) {
-                // Check whole-word constraint
-                if options.whole_words_only {
-                    let before_ok =
-                        col == 0 || !is_word_char(line.chars().nth(col - 1).unwrap_or(' '));
-                    let after_idx = col + text.len();
-                    let after_ok = after_idx >= line.len()
-                        || !is_word_char(line.chars().nth(after_idx).unwrap_or(' '));
-
-                    if !before_ok || !after_ok {
-                        continue;
+                    if whole_ok {
+                        let pos = Point::new(col as i16, line_idx as i16);
+                        // Set selection to highlight the found text
+                        self.selection_start = Some(pos);
+                        self.cursor = Point::new(after as i16, line_idx as i16);
+                        self.make_cursor_visible();
+                        return Some(pos);
                     }
                 }
-
-                let pos = Point::new(col as i16, line_idx as i16);
-                self.selection_start = Some(pos);
-                self.cursor = Point::new((col + text.chars().count()) as i16, line_idx as i16);
-                self.make_cursor_visible();
-                return Some(pos);
+                col += 1;
             }
         }
 
@@ -766,9 +732,19 @@ impl EditorWindow {
                 self.insert_text_internal(text);
             }
             EditAction::DeleteText { pos, text } => {
-                self.cursor = *pos;
                 self.selection_start = Some(*pos);
-                self.cursor.x += text.chars().count() as i16;
+                // Walk the text to find the end position; embedded newlines
+                // move the end down and reset the column
+                let mut end = *pos;
+                for ch in text.chars() {
+                    if ch == '\n' {
+                        end.y += 1;
+                        end.x = 0;
+                    } else {
+                        end.x += 1;
+                    }
+                }
+                self.cursor = end;
                 self.delete_selection_internal();
             }
             EditAction::Compound(actions) => {
@@ -807,26 +783,27 @@ impl EditorWindow {
             self.cursor.x += 1;
             self.push_undo(action);
         } else {
-            // Overwrite mode
+            // Overwrite mode: record delete + insert as one undo step so a
+            // single Ctrl+Z restores the overtyped character
+            let mut steps = Vec::with_capacity(2);
             let line_char_len = self.lines[line_idx].chars().count();
             if col < line_char_len {
                 let old_ch = self.lines[line_idx].chars().nth(col).unwrap();
-                let action = EditAction::DeleteChar {
+                steps.push(EditAction::DeleteChar {
                     pos: self.cursor,
                     ch: old_ch,
-                };
-                self.push_undo(action);
+                });
                 let byte_idx = self.char_to_byte_idx(line_idx, col);
                 self.lines[line_idx].remove(byte_idx);
             }
-            let action = EditAction::InsertChar {
+            steps.push(EditAction::InsertChar {
                 pos: self.cursor,
                 ch,
-            };
+            });
             let byte_idx = self.char_to_byte_idx(line_idx, col);
             self.lines[line_idx].insert(byte_idx, ch);
             self.cursor.x += 1;
-            self.push_undo(action);
+            self.push_undo(EditAction::Compound(steps));
         }
 
         self.selection_start = None;
@@ -856,12 +833,17 @@ impl EditorWindow {
             String::new()
         };
 
+        let action = EditAction::InsertText {
+            pos: self.cursor,
+            text: format!("\n{indent}"),
+        };
+
         self.lines[line_idx] = before;
         self.lines.insert(line_idx + 1, indent.clone() + &after);
 
         self.cursor.y += 1;
         self.cursor.x = indent.chars().count() as i16;
-        self.modified = true;
+        self.push_undo(action);
         self.selection_start = None;
         self.ensure_cursor_visible();
         self.update_indicator();
@@ -892,7 +874,10 @@ impl EditorWindow {
         } else if line_idx + 1 < self.lines.len() {
             let next_line = self.lines.remove(line_idx + 1);
             self.lines[line_idx].push_str(&next_line);
-            self.modified = true;
+            self.push_undo(EditAction::DeleteText {
+                pos: self.cursor,
+                text: "\n".to_string(),
+            });
         }
 
         self.selection_start = None;
@@ -927,7 +912,10 @@ impl EditorWindow {
             let prev_line_char_len = self.lines[line_idx - 1].chars().count();
             self.lines[line_idx - 1].push_str(&current_line);
             self.cursor.x = prev_line_char_len as i16;
-            self.modified = true;
+            self.push_undo(EditAction::DeleteText {
+                pos: self.cursor,
+                text: "\n".to_string(),
+            });
         }
 
         self.selection_start = None;
@@ -1250,7 +1238,9 @@ impl EditorWindow {
             return;
         }
 
-        let lines_to_insert: Vec<&str> = text.lines().collect();
+        // Split on '\n' (not .lines()) so a trailing or lone newline still
+        // produces a line break — undo/redo relies on exact round-tripping
+        let lines_to_insert: Vec<&str> = text.split('\n').collect();
         if lines_to_insert.is_empty() {
             return;
         }
@@ -1959,5 +1949,106 @@ mod tests {
         assert_eq!(editor.line_count(), 1); // EditorWindow always has at least one line
         assert_eq!(editor.get_text(), "");
         assert!(!editor.is_modified());
+    }
+
+    #[test]
+    fn newline_and_line_joins_are_undoable() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("abc");
+        editor.cursor = Point::new(3, 0);
+
+        // Type Enter then "def"
+        editor.insert_newline();
+        editor.insert_char('d');
+        editor.insert_char('e');
+        editor.insert_char('f');
+        assert_eq!(editor.get_text(), "abc\ndef");
+
+        // Undo everything, including the Enter
+        editor.undo();
+        editor.undo();
+        editor.undo();
+        assert_eq!(editor.get_text(), "abc\n");
+        editor.undo();
+        assert_eq!(editor.get_text(), "abc");
+
+        // Redo restores the same shape
+        for _ in 0..4 {
+            editor.redo();
+        }
+        assert_eq!(editor.get_text(), "abc\ndef");
+
+        // Backspace line-join is undoable
+        editor.cursor = Point::new(0, 1);
+        editor.backspace();
+        assert_eq!(editor.get_text(), "abcdef");
+        editor.undo();
+        assert_eq!(editor.get_text(), "abc\ndef");
+
+        // Delete-at-EOL line-join is undoable
+        editor.cursor = Point::new(3, 0);
+        editor.delete_char();
+        assert_eq!(editor.get_text(), "abcdef");
+        editor.undo();
+        assert_eq!(editor.get_text(), "abc\ndef");
+    }
+
+    #[test]
+    fn overwrite_mode_is_single_undo_step() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("xyz");
+        editor.cursor = Point::new(0, 0);
+        editor.toggle_insert_mode();
+
+        editor.insert_char('A');
+        assert_eq!(editor.get_text(), "Ayz");
+        editor.undo();
+        assert_eq!(editor.get_text(), "xyz");
+    }
+
+    #[test]
+    fn replace_all_terminates_when_replacement_contains_pattern() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("a b a");
+
+        let count = editor.replace_all("a", "aa", SearchOptions::default());
+
+        assert_eq!(count, 2);
+        assert_eq!(editor.get_text(), "aa b aa");
+    }
+
+    #[test]
+    fn search_handles_multibyte_lines() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("héllo wörld\nsécond ligne");
+
+        // Match after a multibyte char: column must be in characters
+        let pos = editor.find("wörld", SearchOptions::default()).unwrap();
+        assert_eq!((pos.x, pos.y), (6, 0));
+
+        // Case-insensitive search across multibyte text
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("héllo wörld\nsécond ligne");
+        let pos = editor.find(
+            "SÉCOND",
+            SearchOptions {
+                case_sensitive: false,
+                ..SearchOptions::default()
+            },
+        );
+        assert_eq!(pos.map(|p| (p.x, p.y)), Some((0, 1)));
+    }
+
+    #[test]
+    fn find_next_finds_adjacent_matches() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("abab");
+
+        let first = editor.find("ab", SearchOptions::default()).unwrap();
+        assert_eq!((first.x, first.y), (0, 0));
+        let second = editor.find_next().unwrap();
+        assert_eq!((second.x, second.y), (2, 0));
+        // No wrap-around: Borland's search stops at end of document
+        assert!(editor.find_next().is_none());
     }
 }
