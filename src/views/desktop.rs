@@ -155,6 +155,30 @@ impl Desktop {
         self.children.child_by_id(view_id).is_some()
     }
 
+    /// Get the `ViewId` of the topmost (most recently added) window, if any.
+    pub fn top_view_id(&self) -> Option<ViewId> {
+        let count = self.child_count();
+        if count == 0 {
+            return None;
+        }
+        self.children.view_id_at(count) // +1 background offset baked in
+    }
+
+    /// Get a child view by its `ViewId`.
+    pub fn child_by_id(&self, view_id: ViewId) -> Option<&dyn View> {
+        self.children.child_by_id(view_id)
+    }
+
+    /// Remove a child view by its `ViewId`. Returns true if it was present.
+    pub fn remove_child_by_id(&mut self, view_id: ViewId) -> bool {
+        self.children.remove_by_id(view_id)
+    }
+
+    /// Get a mutable child view by its `ViewId`.
+    pub fn child_by_id_mut(&mut self, view_id: ViewId) -> Option<&mut (dyn View + '_)> {
+        self.children.child_by_id_mut(view_id)
+    }
+
     /// Remove a child view by index
     /// Note: Index 0 refers to the first window (background is at internal index 0)
     /// Used by Application::exec_view() to remove modal dialogs after they close
@@ -722,5 +746,26 @@ mod tests {
         // Non-existent ViewId returns false
         let fake_id = crate::views::view::ViewId::from_u16(9999);
         assert!(!desktop.bring_to_front(fake_id));
+    }
+
+    #[test]
+    fn test_id_tracking_survives_sibling_removal() {
+        // Regression: Application::exec_view used to track the modal view by
+        // index, so removing a lower sibling made it remove the wrong window
+        let mut desktop = Desktop::new(Rect::new(0, 1, 80, 24));
+
+        let id1 = desktop.add(Box::new(Window::new(Rect::new(5, 5, 30, 15), "Win 1")));
+        let modal_id = desktop.add(Box::new(Window::new(Rect::new(10, 6, 35, 16), "Modal")));
+        assert_eq!(desktop.top_view_id(), Some(modal_id));
+
+        // Removing a lower sibling must not disturb identity lookups
+        assert!(desktop.remove_child_by_id(id1));
+        assert!(desktop.contains_id(modal_id));
+        assert!(desktop.child_by_id(modal_id).is_some());
+        assert!(desktop.child_by_id_mut(modal_id).is_some());
+
+        assert!(desktop.remove_child_by_id(modal_id));
+        assert!(!desktop.contains_id(modal_id));
+        assert_eq!(desktop.top_view_id(), None);
     }
 }

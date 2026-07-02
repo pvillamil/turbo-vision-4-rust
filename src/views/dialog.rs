@@ -230,8 +230,14 @@ impl Dialog {
             // Dialog::handle_event() calls window.end_modal() which sets the Group's end_state
             let end_state = self.window.get_end_state();
             if end_state != 0 {
-                self.result = end_state;
-                break;
+                // Matches Borland: do { ... } while( !valid(endState) ) — a
+                // failing validator vetoes the close and re-enters the loop
+                // (Dialog::valid already exempts Cancel/No)
+                if self.valid(end_state) {
+                    self.result = end_state;
+                    break;
+                }
+                self.window.set_end_state(0);
             }
         }
 

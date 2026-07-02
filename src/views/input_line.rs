@@ -453,6 +453,18 @@ impl View for InputLine {
         true
     }
 
+    /// Validate on modal close (Borland: TInputLine::valid via checkValid).
+    ///
+    /// Cancel always passes; any other end state consults the attached
+    /// validator, letting a failing validator veto the dialog close.
+    fn valid(&mut self, command: crate::core::command::CommandId) -> bool {
+        use crate::core::command::CM_CANCEL;
+        if command == CM_CANCEL {
+            return true;
+        }
+        self.validate()
+    }
+
     // set_focus() now uses default implementation from View trait
     // which sets/clears SF_FOCUSED flag
 
@@ -713,5 +725,33 @@ mod tests {
         input.handle_event(&mut ev);
         assert_eq!(data.borrow().chars().count(), 10);
         assert!(data.borrow().chars().all(|c| c == 'é'));
+    }
+
+    #[test]
+    fn failing_validator_vetoes_dialog_close() {
+        use crate::views::validator::Validator;
+        use std::cell::RefCell as RC;
+
+        struct RejectAll;
+        impl Validator for RejectAll {
+            fn is_valid(&self, _input: &str) -> bool {
+                false
+            }
+            fn is_valid_input(&self, _input: &str, _append: bool) -> bool {
+                true
+            }
+            fn error(&self) {}
+        }
+
+        let data = Rc::new(RefCell::new("anything".to_string()));
+        let mut input = InputLine::with_validator(
+            Rect::new(0, 0, 10, 1),
+            10,
+            data,
+            Rc::new(RC::new(RejectAll)),
+        );
+        use crate::core::command::{CM_CANCEL, CM_OK};
+        assert!(!View::valid(&mut input, CM_OK));
+        assert!(View::valid(&mut input, CM_CANCEL));
     }
 }

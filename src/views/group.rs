@@ -308,12 +308,16 @@ impl Group {
             // IMPORTANT: This must be OUTSIDE the event check, so we check
             // end_state even when there are no events (timeout)
             if self.end_state != 0 {
-                break;
+                // Matches Borland: do { ... } while( !valid(endState) ) —
+                // a failing validator vetoes the close and re-enters the loop
+                let end_state = self.end_state;
+                if self.valid(end_state) {
+                    break;
+                }
+                self.end_state = 0;
             }
         }
 
-        // TODO: Borland also calls valid(endState) here
-        // For now, just return endState
         self.end_state
     }
 

@@ -317,9 +317,14 @@ impl Application {
         // Check if view is modal
         let is_modal = (view.state() & SF_MODAL) != 0;
 
-        // Add view to desktop
+        // Add view to desktop; track it by identity so other children being
+        // added or removed during the modal loop can't shift it out from
+        // under us (C++ TGroup::execView uses pointer identity)
         self.desktop.add(view);
-        let view_index = self.desktop.child_count() - 1;
+        let view_id = self
+            .desktop
+            .top_view_id()
+            .expect("view was just added to the desktop");
 
         if !is_modal {
             // Modeless view - just add to desktop and return
@@ -349,19 +354,34 @@ impl Application {
             // Check if application wants to quit (Alt+X, CM_QUIT)
             // This allows quit to work even when modal dialogs are open
             if !self.running {
-                self.desktop.remove_child(view_index);
+                self.desktop.remove_child_by_id(view_id);
                 return CM_CANCEL;
             }
 
             // Check if the modal view wants to close
             // Matches Borland: TGroup::execute() checks endState (tgroup.cc:192)
-            if view_index < self.desktop.child_count() {
-                let end_state = self.desktop.child_at(view_index).get_end_state();
+            // followed by the valid(endState) re-entry check
+            if self.desktop.contains_id(view_id) {
+                let end_state = self
+                    .desktop
+                    .child_by_id(view_id)
+                    .map(|child| child.get_end_state())
+                    .unwrap_or(0);
                 if end_state != 0 {
-                    // Modal view wants to close
-                    // Remove it from desktop and return the end state
-                    self.desktop.remove_child(view_index);
-                    return end_state;
+                    // A failing validator vetoes the close (Borland:
+                    // do { ... } while( !valid(endState) ))
+                    let close_ok = self
+                        .desktop
+                        .child_by_id_mut(view_id)
+                        .map(|child| child.valid(end_state))
+                        .unwrap_or(true);
+                    if close_ok {
+                        self.desktop.remove_child_by_id(view_id);
+                        return end_state;
+                    }
+                    if let Some(child) = self.desktop.child_by_id_mut(view_id) {
+                        child.set_end_state(0);
+                    }
                 }
             } else {
                 // View was removed (closed externally)
