@@ -642,11 +642,15 @@ impl View for Window {
                 event.clear();
             } else if self.auto_close {
                 // Non-modal default: self-close. Mirrors Borland's
-                // TWindow::close() with a trivial valid() — clear the event so
-                // it doesn't double-fire, mark SF_CLOSED so the next
-                // Desktop::remove_closed_windows() sweep removes the window.
+                // TWindow::close(): `if (valid(cmClose)) destroy(this)` — the
+                // valid() hook gives children (editors, dialogs) a chance to
+                // veto the close ("save changes?"). The event is cleared
+                // either way (Borland clears it before calling close()); only
+                // SF_CLOSED is gated on validation.
                 use crate::core::state::SF_CLOSED;
-                self.state |= SF_CLOSED;
+                if self.valid(CM_CLOSE) {
+                    self.state |= SF_CLOSED;
+                }
                 event.clear();
             } else {
                 // Owner opted out of auto-close (set_auto_close(false)) — used
@@ -666,6 +670,13 @@ impl View for Window {
     }
 
     fn set_focus(&mut self, focused: bool) {
+        // Mirror Borland: TWindow::setState(sfSelected) forwards sfActive to
+        // the window and its frame, so inactive windows draw with the
+        // inactive frame palette (see Frame::get_frame_colors).
+        use crate::core::state::SF_ACTIVE;
+        self.set_state_flag(SF_ACTIVE, focused);
+        self.frame.set_state_flag(SF_ACTIVE, focused);
+
         // Propagate focus to the interior group
         // When the window gets focus, set focus on its first focusable child
         if focused {
@@ -922,6 +933,64 @@ mod tests {
             WindowPaletteType::Blue,
         );
         assert_eq!(window.bounds(), Rect::new(5, 5, 40, 20));
+    }
+
+    #[test]
+    fn test_set_focus_propagates_sf_active_to_window_and_frame() {
+        use crate::core::state::SF_ACTIVE;
+
+        let mut window = Window::new(Rect::new(0, 0, 40, 15), "Test");
+
+        window.set_focus(true);
+        assert_ne!(window.state() & SF_ACTIVE, 0);
+        assert_ne!(window.frame.state() & SF_ACTIVE, 0);
+
+        window.set_focus(false);
+        assert_eq!(window.state() & SF_ACTIVE, 0);
+        assert_eq!(window.frame.state() & SF_ACTIVE, 0);
+    }
+
+    #[test]
+    fn test_auto_close_respects_valid() {
+        use crate::core::state::SF_CLOSED;
+
+        // A child view whose valid() vetoes the close
+        struct Vetoer {
+            bounds: Rect,
+        }
+        impl View for Vetoer {
+            fn bounds(&self) -> Rect {
+                self.bounds
+            }
+            fn set_bounds(&mut self, bounds: Rect) {
+                self.bounds = bounds;
+            }
+            fn draw(&mut self, _terminal: &mut crate::terminal::Terminal) {}
+            fn handle_event(&mut self, _event: &mut Event) {}
+            fn valid(&mut self, _command: crate::core::command::CommandId) -> bool {
+                false
+            }
+            fn get_palette(&self) -> Option<crate::core::palette::Palette> {
+                None
+            }
+        }
+
+        // Window with a vetoing child: CM_CLOSE must NOT mark it closed
+        let mut window = Window::new(Rect::new(0, 0, 40, 15), "Test");
+        window.add(Box::new(Vetoer {
+            bounds: Rect::new(0, 0, 5, 1),
+        }));
+        let mut event = Event::command(CM_CLOSE);
+        window.handle_event(&mut event);
+        assert_eq!(window.state() & SF_CLOSED, 0);
+        assert_eq!(event.what, EventType::Nothing); // event still consumed
+
+        // Window whose children all validate: CM_CLOSE closes it
+        let mut window = Window::new(Rect::new(0, 0, 40, 15), "Test");
+        let mut event = Event::command(CM_CLOSE);
+        window.handle_event(&mut event);
+        assert_ne!(window.state() & SF_CLOSED, 0);
+        assert_eq!(event.what, EventType::Nothing);
     }
 
     #[test]

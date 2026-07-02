@@ -19,6 +19,9 @@ pub struct Group {
     background: Option<Attr>,
     end_state: crate::core::command::CommandId, // For execute() event loop (Borland: endState)
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
+    /// Grow mode of this Group itself when nested inside another Group
+    /// (Borland: TView::growMode)
+    grow_mode: crate::core::state::GrowFlags,
 }
 
 impl Group {
@@ -31,6 +34,7 @@ impl Group {
             background: None,
             end_state: 0,
             palette_chain: None,
+            grow_mode: 0,
         }
     }
 
@@ -43,6 +47,18 @@ impl Group {
             background: Some(background),
             end_state: 0,
             palette_chain: None,
+            grow_mode: 0,
+        }
+    }
+
+    /// Set the grow mode of a child by index (Borland: child->growMode = ...).
+    ///
+    /// Convenience for callers that add children whose concrete type does not
+    /// override `set_grow_mode()` — the call is then a no-op, matching the
+    /// trait default.
+    pub fn set_child_grow_mode(&mut self, index: usize, grow_mode: crate::core::state::GrowFlags) {
+        if index < self.children.len() {
+            self.children[index].set_grow_mode(grow_mode);
         }
     }
 
@@ -190,6 +206,7 @@ impl Group {
     /// Matches Borland: TGroup::remove(TView *p) or TGroup::shutDown()
     pub fn remove(&mut self, index: usize) {
         if index < self.children.len() {
+            let removed_focused = self.focused == index;
             self.children.remove(index);
             // `view_ids` is a parallel vec — must stay in lock-step with
             // `children`. Forgetting it leaves stale ids that point past the
@@ -206,6 +223,20 @@ impl Group {
             // If we removed the last child, clear focus
             if self.children.is_empty() {
                 self.focused = 0;
+            } else if removed_focused {
+                // The focused child was removed: re-establish focus on the
+                // nearest focusable child so focus isn't silently lost.
+                // Matches Borland: TGroup::remove() → resetCurrent()/focusNext.
+                let len = self.children.len();
+                let start = self.focused.min(len - 1);
+                for k in 0..len {
+                    let idx = (start + k) % len;
+                    if self.children[idx].can_focus() {
+                        self.focused = idx;
+                        self.children[idx].set_focus(true);
+                        break;
+                    }
+                }
             }
         }
     }
@@ -444,14 +475,19 @@ impl View for Group {
         // Update our bounds
         self.bounds = bounds;
 
-        // Update all children's bounds by the offset and size change
+        // Update all children's bounds. Every child shifts by the group's
+        // offset (children store absolute coordinates); each edge additionally
+        // follows the size delta only if the matching grow bit is set.
+        // Matches Borland: TView::calcBounds() driven by growMode.
+        use crate::core::state::{GF_GROW_HI_X, GF_GROW_HI_Y, GF_GROW_LO_X, GF_GROW_LO_Y};
         for child in &mut self.children {
+            let grow = child.grow_mode();
             let child_bounds = child.bounds();
             let new_bounds = Rect::new(
-                child_bounds.a.x + dx,
-                child_bounds.a.y + dy,
-                child_bounds.b.x + dx + dw,
-                child_bounds.b.y + dy + dh,
+                child_bounds.a.x + dx + if grow & GF_GROW_LO_X != 0 { dw } else { 0 },
+                child_bounds.a.y + dy + if grow & GF_GROW_LO_Y != 0 { dh } else { 0 },
+                child_bounds.b.x + dx + if grow & GF_GROW_HI_X != 0 { dw } else { 0 },
+                child_bounds.b.y + dy + if grow & GF_GROW_HI_Y != 0 { dh } else { 0 },
             );
             child.set_bounds(new_bounds);
         }
@@ -582,6 +618,13 @@ impl View for Group {
                     // For other event types, return after handling
                     return;
                 }
+            } else {
+                // No child under the mouse: positional events must NOT be
+                // forwarded to the focused child. Matches Borland:
+                // TGroup::handleEvent() routes positional events only to
+                // firstThat(hasMouse); if no subview contains the mouse the
+                // event goes nowhere.
+                return;
             }
         }
 
@@ -654,11 +697,11 @@ impl View for Group {
                     }
                     return;
                 }
-                // Matches Borland: TGroup::handleEvent() broadcasts to all children via forEach
+                // Matches Borland: TGroup::handleEvent() broadcasts to ALL
+                // children via forEach(doHandleEvent) — delivery does not stop
+                // when one child clears the event, so every child sees the
+                // broadcast.
                 for child in &mut self.children {
-                    if event.what == EventType::Nothing {
-                        break; // Event was handled
-                    }
                     child.handle_event(event);
                 }
             } else {
@@ -715,6 +758,14 @@ impl View for Group {
             }
             true
         }
+    }
+
+    fn grow_mode(&self) -> crate::core::state::GrowFlags {
+        self.grow_mode
+    }
+
+    fn set_grow_mode(&mut self, grow_mode: crate::core::state::GrowFlags) {
+        self.grow_mode = grow_mode;
     }
 
     fn set_palette_chain(&mut self, node: Option<crate::core::palette_chain::PaletteChainNode>) {
@@ -815,6 +866,188 @@ mod tests {
         fn get_palette(&self) -> Option<crate::core::palette::Palette> {
             None
         }
+    }
+
+    // Test view that records events, can take focus, and stores a grow mode
+    struct RecorderView {
+        bounds: Rect,
+        state: crate::core::state::StateFlags,
+        grow_mode: crate::core::state::GrowFlags,
+        events: std::rc::Rc<std::cell::RefCell<Vec<EventType>>>,
+    }
+
+    impl RecorderView {
+        fn new(bounds: Rect) -> Self {
+            Self {
+                bounds,
+                state: 0,
+                grow_mode: 0,
+                events: std::rc::Rc::new(std::cell::RefCell::new(Vec::new())),
+            }
+        }
+    }
+
+    impl View for RecorderView {
+        fn bounds(&self) -> Rect {
+            self.bounds
+        }
+
+        fn set_bounds(&mut self, bounds: Rect) {
+            self.bounds = bounds;
+        }
+
+        fn draw(&mut self, _terminal: &mut Terminal) {}
+
+        fn handle_event(&mut self, event: &mut Event) {
+            self.events.borrow_mut().push(event.what);
+        }
+
+        fn can_focus(&self) -> bool {
+            true
+        }
+
+        fn state(&self) -> crate::core::state::StateFlags {
+            self.state
+        }
+
+        fn set_state(&mut self, state: crate::core::state::StateFlags) {
+            self.state = state;
+        }
+
+        fn grow_mode(&self) -> crate::core::state::GrowFlags {
+            self.grow_mode
+        }
+
+        fn set_grow_mode(&mut self, grow_mode: crate::core::state::GrowFlags) {
+            self.grow_mode = grow_mode;
+        }
+
+        fn get_palette(&self) -> Option<crate::core::palette::Palette> {
+            None
+        }
+    }
+
+    #[test]
+    fn test_mouse_down_outside_children_not_sent_to_focused() {
+        use crate::core::geometry::Point;
+
+        let mut group = Group::new(Rect::new(0, 0, 80, 25));
+        let child = RecorderView::new(Rect::new(0, 0, 10, 5));
+        let events = child.events.clone();
+        group.add(Box::new(child));
+        group.set_initial_focus();
+
+        // MouseDown on empty group area (outside the child at 0,0-10,5)
+        let mut event = Event::mouse(EventType::MouseDown, Point::new(50, 20), 1, false);
+        group.handle_event(&mut event);
+
+        // The focused child must NOT have received the positional event
+        assert!(events.borrow().is_empty());
+
+        // But a click ON the child is still delivered (focus-on-click intact)
+        let mut event = Event::mouse(EventType::MouseDown, Point::new(5, 2), 1, false);
+        group.handle_event(&mut event);
+        assert_eq!(events.borrow().as_slice(), &[EventType::MouseDown]);
+    }
+
+    #[test]
+    fn test_grow_modes_on_resize() {
+        use crate::core::state::{GF_GROW_ALL, GF_GROW_HI_X, GF_GROW_HI_Y};
+
+        let mut group = Group::new(Rect::new(0, 0, 40, 20));
+
+        // Fixed child (grow_mode = 0, Borland default)
+        group.add(Box::new(RecorderView::new(Rect::new(1, 1, 11, 3))));
+
+        // Right/bottom-growing child (gfGrowHiX | gfGrowHiY)
+        let mut growing = RecorderView::new(Rect::new(1, 5, 11, 7));
+        growing.set_grow_mode(GF_GROW_HI_X | GF_GROW_HI_Y);
+        group.add(Box::new(growing));
+
+        // Fully growing child (gfGrowAll — moves with the far edge)
+        let mut all = RecorderView::new(Rect::new(30, 15, 39, 19));
+        all.set_grow_mode(GF_GROW_ALL);
+        group.add(Box::new(all));
+
+        // Resize the group: +10 wide, +5 tall (no move)
+        group.set_bounds(Rect::new(0, 0, 50, 25));
+
+        // Fixed child: unchanged
+        assert_eq!(group.child_at(0).bounds(), Rect::new(1, 1, 11, 3));
+        // HiX|HiY child: only b edge moved
+        assert_eq!(group.child_at(1).bounds(), Rect::new(1, 5, 21, 12));
+        // GrowAll child: both edges moved
+        assert_eq!(group.child_at(2).bounds(), Rect::new(40, 20, 49, 24));
+
+        // Moving the group (no size change) shifts all children equally
+        group.set_bounds(Rect::new(5, 2, 55, 27));
+        assert_eq!(group.child_at(0).bounds(), Rect::new(6, 3, 16, 5));
+        assert_eq!(group.child_at(1).bounds(), Rect::new(6, 7, 26, 14));
+        assert_eq!(group.child_at(2).bounds(), Rect::new(45, 22, 54, 26));
+    }
+
+    #[test]
+    fn test_focus_restored_after_removing_focused_child() {
+        use crate::core::state::SF_FOCUSED;
+
+        let mut group = Group::new(Rect::new(0, 0, 80, 25));
+        group.add(Box::new(RecorderView::new(Rect::new(0, 0, 10, 2))));
+        group.add(Box::new(RecorderView::new(Rect::new(0, 3, 10, 5))));
+        group.add(Box::new(RecorderView::new(Rect::new(0, 6, 10, 8))));
+
+        group.set_focus_to(1);
+        assert!(group.child_at(1).is_focused());
+
+        // Remove the focused child — focus must land on a remaining child
+        group.remove(1);
+        assert_eq!(group.len(), 2);
+        let focused_count = (0..group.len())
+            .filter(|&i| (group.child_at(i).state() & SF_FOCUSED) != 0)
+            .count();
+        assert_eq!(focused_count, 1);
+        assert!(group.focused_child().unwrap().is_focused());
+    }
+
+    #[test]
+    fn test_broadcast_delivered_to_all_children() {
+        // A child that clears broadcast events (simulates a "consumer")
+        struct Consumer {
+            bounds: Rect,
+        }
+        impl View for Consumer {
+            fn bounds(&self) -> Rect {
+                self.bounds
+            }
+            fn set_bounds(&mut self, bounds: Rect) {
+                self.bounds = bounds;
+            }
+            fn draw(&mut self, _terminal: &mut Terminal) {}
+            fn handle_event(&mut self, event: &mut Event) {
+                if event.what == EventType::Broadcast {
+                    event.clear();
+                }
+            }
+            fn get_palette(&self) -> Option<crate::core::palette::Palette> {
+                None
+            }
+        }
+
+        let mut group = Group::new(Rect::new(0, 0, 80, 25));
+        // First child consumes broadcasts
+        group.add(Box::new(Consumer {
+            bounds: Rect::new(0, 0, 5, 1),
+        }));
+        // Second child records what it receives
+        let recorder = RecorderView::new(Rect::new(0, 2, 5, 3));
+        let events = recorder.events.clone();
+        group.add(Box::new(recorder));
+
+        let mut event = Event::broadcast(9999);
+        group.handle_event(&mut event);
+
+        // The second child was still visited even though the first cleared
+        // the event (Borland delivers broadcasts to every child)
+        assert_eq!(events.borrow().len(), 1);
     }
 
     #[test]

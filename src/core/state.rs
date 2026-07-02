@@ -23,6 +23,25 @@ pub const SF_EXPOSED: StateFlags = 0x800;
 pub const SF_CLOSED: StateFlags = 0x1000; // Window marked for removal (Rust-specific)
 pub const SF_RESIZING: StateFlags = 0x2000; // Window is being resized (Rust-specific)
 
+// TView grow mode masks (matching Borland's gfGrowXxx flags)
+// When a parent Group is resized by (dw, dh), each edge of a child whose
+// corresponding grow bit is set moves by the size delta; edges without the
+// bit keep their position relative to the parent's origin.
+
+/// Grow mode flags (Borland: uchar growMode)
+pub type GrowFlags = u8;
+
+/// Left edge follows the parent's width change (Borland: gfGrowLoX)
+pub const GF_GROW_LO_X: GrowFlags = 0x01;
+/// Top edge follows the parent's height change (Borland: gfGrowLoY)
+pub const GF_GROW_LO_Y: GrowFlags = 0x02;
+/// Right edge follows the parent's width change (Borland: gfGrowHiX)
+pub const GF_GROW_HI_X: GrowFlags = 0x04;
+/// Bottom edge follows the parent's height change (Borland: gfGrowHiY)
+pub const GF_GROW_HI_Y: GrowFlags = 0x08;
+/// All edges follow the parent's size change (Borland: gfGrowAll)
+pub const GF_GROW_ALL: GrowFlags = 0x0F;
+
 // TView Option masks
 pub const OF_SELECTABLE: u16 = 0x001;
 pub const OF_TOP_SELECT: u16 = 0x002;

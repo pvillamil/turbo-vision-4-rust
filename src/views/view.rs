@@ -96,6 +96,24 @@ pub trait View {
     /// Set view state flags
     fn set_state(&mut self, _state: StateFlags) {}
 
+    /// Get this view's grow mode flags (Borland: TView::growMode).
+    ///
+    /// Controls how the view's edges move when its parent Group is resized.
+    /// See `GF_GROW_LO_X`, `GF_GROW_LO_Y`, `GF_GROW_HI_X`, `GF_GROW_HI_Y`
+    /// and `GF_GROW_ALL` in `core::state`. The default is `0` (fixed size
+    /// and position relative to the parent's origin), matching Borland's
+    /// default `growMode = 0`.
+    fn grow_mode(&self) -> crate::core::state::GrowFlags {
+        0
+    }
+
+    /// Set this view's grow mode flags (Borland: TView::growMode).
+    ///
+    /// The default implementation is a no-op; views that participate in
+    /// parent-resize layout store the flags in a field and override both
+    /// `grow_mode()` and `set_grow_mode()`.
+    fn set_grow_mode(&mut self, _grow_mode: crate::core::state::GrowFlags) {}
+
     /// Set or clear specific state flag(s)
     /// Matches Borland's TView::setState(ushort aState, Boolean enable)
     /// If enable is true, sets the flag(s), otherwise clears them

@@ -22,6 +22,10 @@ pub struct Frame {
     state: StateFlags,
     /// Whether the frame is resizable (matches Borland's wfGrow flag)
     resizable: bool,
+    /// True while a MouseDown that started on the close icon is outstanding.
+    /// CM_CLOSE only fires when the matching MouseUp is also over the icon
+    /// (matches Borland: TFrame tracks press-release on the close icon).
+    close_pressed: bool,
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
 }
 
@@ -51,8 +55,15 @@ impl Frame {
             palette_type,
             state: SF_ACTIVE,
             resizable,
+            close_pressed: false,
             palette_chain: None,
         }
+    }
+
+    /// True if the given position is over the close icon `[■]` on the top
+    /// frame row (columns 2..=4 relative to the frame's left edge).
+    fn is_on_close_icon(&self, pos: crate::core::geometry::Point) -> bool {
+        pos.y == self.bounds.a.y && pos.x >= self.bounds.a.x + 2 && pos.x <= self.bounds.a.x + 4
     }
 
     /// Set whether the frame is resizable (matches Borland's wfGrow flag).
@@ -207,11 +218,16 @@ impl View for Frame {
     }
 
     fn handle_event(&mut self, event: &mut Event) {
-        // Note: Removed SF_ACTIVE check - all frames are created active and never deactivated
-        // The check was preventing event handling in some edge cases
+        // Note: no SF_ACTIVE gate here — the owning Window only forwards
+        // events to its own frame, and an inactive window can still receive
+        // the click that activates it.
 
         if event.what == EventType::MouseDown && (event.mouse.buttons & MB_LEFT_BUTTON) != 0 {
             let mouse_pos = event.mouse.pos;
+
+            // Any new press resets close-icon tracking; it is re-armed below
+            // only when the press lands on the icon itself.
+            self.close_pressed = false;
 
             // Check if click is on the resize corner (bottom-right, matching Borland tframe.cc:214)
             // Borland: mouse.x >= size.x - 2 && mouse.y >= size.y - 1
@@ -230,7 +246,11 @@ impl View for Frame {
             if mouse_pos.y == self.bounds.a.y {
                 // Check if click is on the close button [■] at position (2,3,4)
                 if mouse_pos.x >= self.bounds.a.x + 2 && mouse_pos.x <= self.bounds.a.x + 4 {
-                    // Close button area - don't start drag, wait for mouse up
+                    // Close button area - arm press tracking, don't start
+                    // drag, and consume the press so it doesn't leak to other
+                    // views. Close fires only on the matching MouseUp.
+                    self.close_pressed = true;
+                    event.clear();
                     return;
                 }
 
@@ -244,16 +264,21 @@ impl View for Frame {
                 return;
             }
         } else if event.what == EventType::MouseUp {
-            // Handle mouse up on close button FIRST (before drag/resize cleanup)
-            // This ensures close button works even if there was accidental mouse movement
+            // Handle close-icon release FIRST (before drag/resize cleanup).
+            // CM_CLOSE fires only when the press ALSO started on the icon
+            // (matches Borland: TFrame tracks press-release on the icon).
             let mouse_pos = event.mouse.pos;
 
-            if mouse_pos.y == self.bounds.a.y
-                && mouse_pos.x >= self.bounds.a.x + 2
-                && mouse_pos.x <= self.bounds.a.x + 4
-            {
-                // Generate close command
-                *event = Event::command(CM_CLOSE);
+            if self.close_pressed {
+                self.close_pressed = false;
+                if self.is_on_close_icon(mouse_pos) {
+                    // Generate close command
+                    *event = Event::command(CM_CLOSE);
+                } else {
+                    // Press started on the icon but was released elsewhere:
+                    // cancel the close and consume the release.
+                    event.clear();
+                }
                 // Also clear drag/resize state if set
                 self.state &= !(SF_DRAGGING | SF_RESIZING);
                 return;
@@ -384,5 +409,82 @@ impl FrameBuilder {
 impl Default for FrameBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::geometry::Point;
+
+    fn frame() -> Frame {
+        Frame::new(Rect::new(0, 0, 40, 10), "Test", false)
+    }
+
+    fn mouse(what: EventType, x: i16, y: i16) -> Event {
+        Event::mouse(what, Point::new(x, y), MB_LEFT_BUTTON, false)
+    }
+
+    #[test]
+    fn test_close_button_press_and_release_generates_close() {
+        let mut f = frame();
+
+        // Press on the close icon: event is consumed (does not leak)
+        let mut down = mouse(EventType::MouseDown, 3, 0);
+        f.handle_event(&mut down);
+        assert_eq!(down.what, EventType::Nothing);
+
+        // Release on the icon: CM_CLOSE is generated
+        let mut up = mouse(EventType::MouseUp, 3, 0);
+        f.handle_event(&mut up);
+        assert_eq!(up.what, EventType::Command);
+        assert_eq!(up.command, CM_CLOSE);
+    }
+
+    #[test]
+    fn test_release_on_close_icon_without_press_does_not_close() {
+        let mut f = frame();
+
+        // MouseUp over the icon with no prior press on it — must NOT close
+        let mut up = mouse(EventType::MouseUp, 3, 0);
+        f.handle_event(&mut up);
+        assert_ne!(up.what, EventType::Command);
+    }
+
+    #[test]
+    fn test_press_on_icon_release_elsewhere_cancels_close() {
+        let mut f = frame();
+
+        let mut down = mouse(EventType::MouseDown, 3, 0);
+        f.handle_event(&mut down);
+
+        // Release away from the icon: close is cancelled, release consumed
+        let mut up = mouse(EventType::MouseUp, 20, 5);
+        f.handle_event(&mut up);
+        assert_eq!(up.what, EventType::Nothing);
+
+        // A later release over the icon must not close either
+        let mut up2 = mouse(EventType::MouseUp, 3, 0);
+        f.handle_event(&mut up2);
+        assert_ne!(up2.what, EventType::Command);
+    }
+
+    #[test]
+    fn test_press_elsewhere_disarms_close_tracking() {
+        let mut f = frame();
+
+        // Arm, then press somewhere else on the title bar
+        let mut down = mouse(EventType::MouseDown, 3, 0);
+        f.handle_event(&mut down);
+        let mut down2 = mouse(EventType::MouseDown, 20, 0);
+        f.handle_event(&mut down2);
+        // End the drag started by the title-bar press
+        let mut up_drag = mouse(EventType::MouseUp, 20, 0);
+        f.handle_event(&mut up_drag);
+
+        // Release over the icon: the icon press was superseded — no close
+        let mut up = mouse(EventType::MouseUp, 3, 0);
+        f.handle_event(&mut up);
+        assert_ne!(up.what, EventType::Command);
     }
 }
