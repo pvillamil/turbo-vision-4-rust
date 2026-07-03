@@ -1,0 +1,23 @@
+[package]
+name = "turbo-vision-extras"
+version = "0.1.0"
+edition = "2024"
+authors = ["enzinol@gmail.com"]
+license = "MIT"
+repository = "https://github.com/aovestdipaperino/turbo-vision-4-rust"
+homepage = "https://github.com/aovestdipaperino/turbo-vision-4-rust"
+description = "Extra controls for the turbo-vision TUI framework: combo box, data grid, gauge, slider, spin control, tabbed notebook, popup menus, virtual list box, scrolling dialogs"
+keywords = ["tui", "terminal", "widgets", "turbo-vision", "controls"]
+categories = ["command-line-interface", "gui"]
+readme = "README.md"
+
+[dependencies]
+turbo-vision = { version = "2.0.0", path = ".." }
+crossterm = "0.29"
+
+[lints.rust]
+missing_debug_implementations = "warn"
+unused_lifetimes = "warn"
+
+[lints.clippy]
+perf = { level = "warn", priority = -1 }
