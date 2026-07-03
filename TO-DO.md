@@ -39,7 +39,7 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 - [x] `SF_ACTIVE` propagates via Window::set_focus to window + frame; inactive palette now used
 - [x] Auto-close honors `valid(cmClose)` — children can veto
 - [x] Modal views tracked by ViewId; `valid(endState)` re-entry in Group/Dialog execute; InputLine validators can veto OK
-- [ ] Command IDs diverge from Borland (`CM_QUIT=24` vs `cmQuit=1` etc.) — fix or document and drop "100% parity" claim
+- [x] Command IDs renumbered to Borland values (breaking change; constants-only contract); KB_CTRL_F12 fixed to BIOS 0x8A00
 - [x] PictureValidator is a full TPXPictureValidator port (incl. groups/repetition/alternatives); auto-fill wired into InputLine typing via Validator::complete()
 - [x] File dialog follows Borland's wildcard→dir→file order (typed paths return the file); real glob matching (`*`/`?`)
 - [x] Dropdown hit-testing uses the real rendered width (shared dropdown_width helper)
@@ -47,22 +47,22 @@ From the 2026-07-02 review of `turbo-vision-4-rust` v1.3.1 vs the kloczek/tvisio
 
 ## P2 — Medium (feature gaps / semantic drift)
 
-- [ ] Editor: no word movement/deletion, no Ins overwrite toggle, no persistent blocks; tabs→spaces; overwrite pushes two undo entries
-- [ ] Memo consumes Tab instead of moving dialog focus — `memo.rs:715`
-- [ ] FileEditor: no `.bak` backup; save normalizes CRLF→LF and drops trailing newline
-- [ ] Indicator shows `col x row` vs Borland `row:col` — `indicator.rs:66`
-- [ ] Missing: `putEvent` slot, Alt+1-9 window select, window numbers, `cmZoom`/`cmResize` dispatch, zoom icon, keyboard move/resize, status-line `update()` on idle, `StatusDef` switching
-- [ ] Status line sees events last instead of first; app hard-codes Alt+X/F1/F12 — `application.rs:476-522`
-- [ ] Focus chain ignores `SF_DISABLED`/`SF_VISIBLE` in select_next/previous
+- [x] Editor: Ctrl+arrows word movement, Ctrl+Backspace/Del word delete (single undo step), Ins overwrite toggle (persistent blocks and literal tabs remain deliberate deviations)
+- [x] Memo passes Tab through for dialog focus (Borland TMemo)
+- [x] FileEditor: opt-in `.bak` backups; saves preserve CRLF and trailing-newline style
+- [x] Indicator shows Borland `line:col` (1-based)
+- [x] `put_event` slot, Alt+1-9 window selection with frame-drawn numbers, CM_ZOOM dispatch + double-click-title zoom, CM_RESIZE keyboard move/resize, StatusDef switching driven from idle (zoom ICON drawing still not rendered — visual polish only)
+- [ ] Status line sees events last instead of first; app hard-codes Alt+X/F1/F12 — deliberate for now (reordering risks shadowing regressions); revisit if user-defined status hotkeys are needed
+- [x] Focus chain skips SF_DISABLED children and never drops focus when no other candidate exists (SF_VISIBLE unused in this port)
 - [x] Broadcasts delivered to all children; focus re-established after removing the focused child
-- [ ] Desktop cascade/tile geometry differs from Borland; skip `tileError` and `sfVisible` checks — `desktop.rs:283-384`
-- [ ] Scroller `set_limit` semantics off by a page; no scrollbar auto-repeat; full thumb when nothing to scroll
-- [ ] `CommandSet::enable_range(n, n)` silent no-op — `command_set.rs:206/244`; `init_command_set` disables only CM_CLOSE
-- [ ] Quit during modal returns `CM_CANCEL` instead of `cmQuit` — `application.rs:345`
-- [ ] Frame: title not centered (close-button press tracking fixed in P1)
-- [ ] InputLine: no select-all-on-focus, no shift-selection or Ins mode; `max_length` off-by-one
-- [ ] `set_esc_timeout` is a silent no-op — `terminal/mod.rs:318`
-- [ ] History/clipboard global mutexes `.lock().unwrap()` — poison cascades
+- [x] Tile uses Borland mostEqualDivisors/dividerLoc exact fill; cascade extends all windows to the corner (tileError min-size check still omitted)
+- [x] Scroller clamps to limit-minus-page (Borland setLimit); flat scrollbar when nothing to scroll; CM_SCROLLBAR_CHANGED constant added (mouse auto-repeat still absent)
+- [x] enable/disable_range accept single-command ranges and clamp; init_command_set disables Borland's five window commands
+- [x] Quit during modal returns CM_QUIT
+- [x] Frame titles centered with Borland clamping
+- [x] InputLine: select-all-on-focus, Shift+arrow selection, Ins overwrite mode (`max_length` counts characters — documented deviation from Borland's NUL-inclusive count)
+- [x] `set_esc_timeout` works via Backend::as_any_mut downcast
+- [x] Global history mutex tolerates poisoning (clipboard already guarded)
 
 ## Deliberate deviations — document in README instead of fixing
 
