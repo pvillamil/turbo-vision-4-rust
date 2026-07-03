@@ -42,6 +42,9 @@ pub struct Application {
     help_file: Option<Rc<RefCell<HelpFile>>>,
     /// Help context mappings (context ID to topic ID)
     help_context: HelpContext,
+    /// Current help context driving StatusDef switching (Borland: the
+    /// focused view's helpCtx; set explicitly in this architecture)
+    current_help_ctx: u16,
 }
 
 impl Application {
@@ -94,6 +97,7 @@ impl Application {
             running: true,
             needs_redraw: true, // Initial draw needed
             pending_event: None,
+            current_help_ctx: 0,
             overlay_widgets: Vec::new(),
             help_file: None,
             help_context: HelpContext::new(),
@@ -842,7 +846,23 @@ impl Application {
 
     /// Idle processing - broadcasts command set changes and updates command states
     /// Matches Borland: TProgram::idle() (tprogram.cc:248-257)
+    /// Set the current help context.
+    ///
+    /// Matches Borland: TProgram tracks the focused view's helpCtx; since
+    /// views here don't carry one, applications set it when the active
+    /// window changes. The status line's TStatusDef item set follows it on
+    /// the next idle tick (see StatusLine::with_defs).
+    pub fn set_help_context(&mut self, help_ctx: u16) {
+        self.current_help_ctx = help_ctx;
+    }
+
     pub fn idle(&mut self) {
+        // Status line follows the current help context (Borland:
+        // TProgram::idle calls statusLine->update())
+        if let Some(ref mut status_line) = self.status_line {
+            status_line.update(self.current_help_ctx);
+        }
+
         // Update overlay widgets (animations, etc.)
         // These continue running even during modal dialogs
         for widget in &mut self.overlay_widgets {

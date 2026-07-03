@@ -36,6 +36,10 @@ pub struct StatusLine {
     item_positions: Vec<(i16, i16)>, // (start_x, end_x) for each item
     selected_item: Option<usize>,    // Currently hovered/selected item
     hint_text: Option<String>,       // Context-sensitive help text
+    /// Optional help-context-ranged item sets (Borland: TStatusDef chain).
+    /// When set, update() swaps `items` based on the current help context.
+    defs: Vec<crate::core::status_data::StatusDef>,
+    current_help_ctx: u16,
     options: u16,
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
 }
@@ -50,12 +54,57 @@ impl StatusLine {
             item_positions: Vec::new(),
             selected_item: None,
             hint_text: None,
+            defs: Vec::new(),
+            current_help_ctx: 0,
             options: OF_PRE_PROCESS, // Status line processes in pre-process phase (matches Borland)
             palette_chain: None,
         }
     }
 
     /// Set the hint text to display on the right side of the status line
+    /// Create a status line whose item sets switch with the help context.
+    ///
+    /// Matches Borland: `TStatusLine(bounds, TStatusDef chain)` — `update()`
+    /// picks the first def whose `[min, max]` range contains the current
+    /// help context.
+    pub fn with_defs(bounds: Rect, defs: Vec<crate::core::status_data::StatusDef>) -> Self {
+        let items = defs
+            .first()
+            .map(|d| Self::convert_items(&d.items))
+            .unwrap_or_default();
+        let mut line = Self::new(bounds, items);
+        line.defs = defs;
+        line
+    }
+
+    /// Switch the visible item set to the def matching `help_ctx`.
+    ///
+    /// Matches Borland: TStatusLine::update()/findItems(). No-op when the
+    /// status line was built from a flat item list or the context is
+    /// unchanged.
+    pub fn update(&mut self, help_ctx: u16) {
+        if self.defs.is_empty() || help_ctx == self.current_help_ctx {
+            return;
+        }
+        self.current_help_ctx = help_ctx;
+        if let Some(def) = self
+            .defs
+            .iter()
+            .find(|d| d.min <= help_ctx && help_ctx <= d.max)
+        {
+            self.items = Self::convert_items(&def.items);
+            self.item_positions.clear();
+        }
+    }
+
+    /// Convert declarative status_data items into the view's item type.
+    fn convert_items(items: &[crate::core::status_data::StatusItem]) -> Vec<StatusItem> {
+        items
+            .iter()
+            .map(|i| StatusItem::new(&i.text, i.key_code, i.command))
+            .collect()
+    }
+
     pub fn set_hint(&mut self, hint: Option<String>) {
         self.hint_text = hint;
     }
@@ -379,5 +428,37 @@ mod tests {
 
         assert_eq!(event.what, EventType::Command);
         assert_eq!(event.command, TEST_CMD);
+    }
+
+    #[test]
+    fn test_status_defs_switch_with_help_context() {
+        use crate::core::status_data::{StatusDef, StatusItem as DataItem};
+
+        let defs = vec![
+            StatusDef::new(0, 99, vec![DataItem::new("~Alt+X~ Exit", 0x2D00, 1)]),
+            StatusDef::new(
+                100,
+                199,
+                vec![
+                    DataItem::new("~F2~ Save", 0x3C00, 302),
+                    DataItem::new("~F3~ Open", 0x3D00, 301),
+                ],
+            ),
+        ];
+        let mut line = StatusLine::with_defs(Rect::new(0, 24, 80, 25), defs);
+        assert_eq!(line.items.len(), 1);
+
+        // Entering the editor context (100..=199) swaps the item set
+        line.update(150);
+        assert_eq!(line.items.len(), 2);
+        assert_eq!(line.items[0].text, "~F2~ Save");
+
+        // Back to the default range
+        line.update(5);
+        assert_eq!(line.items.len(), 1);
+
+        // Unknown context keeps the current set
+        line.update(999);
+        assert_eq!(line.items.len(), 1);
     }
 }

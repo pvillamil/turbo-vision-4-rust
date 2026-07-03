@@ -29,6 +29,9 @@ pub struct Window {
     /// Window number for Alt+1..9 selection (Borland: TWindow::number;
     /// None = wnNoNumber)
     number: Option<u8>,
+    /// Saved bounds while keyboard move/resize mode is active (Borland:
+    /// cmResize -> dragView; Esc restores these bounds)
+    keyboard_resize_saved: Option<Rect>,
     /// Saved bounds for zoom/restore (matches Borland's zoomRect)
     zoom_rect: Rect,
     /// Previous bounds (for calculating union rect for redrawing)
@@ -139,8 +142,9 @@ impl Window {
             drag_offset: None,
             resize_start_size: None,
             min_size: Point::new(16, 6),
-            number: None, // Minimum size: 16 wide, 6 tall (matches Borland's minWinSize)
-            zoom_rect: bounds, // Initialize to current bounds
+            number: None,
+            keyboard_resize_saved: None, // Minimum size: 16 wide, 6 tall (matches Borland's minWinSize)
+            zoom_rect: bounds,           // Initialize to current bounds
             prev_bounds: None,
             palette_chain: None,
             palette_type: window_palette,
@@ -489,6 +493,61 @@ impl View for Window {
     }
 
     fn handle_event(&mut self, event: &mut Event) {
+        // Keyboard move/resize mode (Borland: cmResize enters dragView with
+        // dmDragMove|dmDragGrow; arrows move, Shift+arrows resize, Enter
+        // confirms, Esc restores the saved bounds)
+        if event.what == EventType::Command
+            && event.command == crate::core::command::CM_RESIZE
+            && (self.state & crate::core::state::SF_ACTIVE) != 0
+        {
+            self.keyboard_resize_saved = Some(self.bounds);
+            event.clear();
+            return;
+        }
+        if let Some(saved) = self.keyboard_resize_saved {
+            if event.what == EventType::Keyboard {
+                use crate::core::event::{
+                    KB_DOWN, KB_ENTER, KB_ESC, KB_ESC_ESC, KB_LEFT, KB_RIGHT, KB_UP,
+                };
+                let shift = event
+                    .key_modifiers
+                    .contains(crossterm::event::KeyModifiers::SHIFT);
+                let (mut dx, mut dy) = (0i16, 0i16);
+                match event.key_code {
+                    KB_LEFT => dx = -1,
+                    KB_RIGHT => dx = 1,
+                    KB_UP => dy = -1,
+                    KB_DOWN => dy = 1,
+                    KB_ENTER => {
+                        self.keyboard_resize_saved = None;
+                        event.clear();
+                        return;
+                    }
+                    KB_ESC | KB_ESC_ESC => {
+                        self.set_bounds(saved);
+                        self.keyboard_resize_saved = None;
+                        event.clear();
+                        return;
+                    }
+                    _ => return, // swallow nothing else; stay in mode
+                }
+                let mut b = self.bounds;
+                if shift {
+                    // Resize the bottom-right corner, respecting min size
+                    b.b.x = (b.b.x + dx).max(b.a.x + self.min_size.x);
+                    b.b.y = (b.b.y + dy).max(b.a.y + self.min_size.y);
+                } else {
+                    b.a.x += dx;
+                    b.a.y += dy;
+                    b.b.x += dx;
+                    b.b.y += dy;
+                }
+                self.set_bounds(b);
+                event.clear();
+                return;
+            }
+        }
+
         // First, let the frame handle the event (for close button clicks, drag start, etc.)
         self.frame.handle_event(event);
 
@@ -1021,5 +1080,43 @@ mod tests {
             .palette_type(WindowPaletteType::Gray)
             .build();
         assert_eq!(window.bounds(), Rect::new(5, 5, 40, 20));
+    }
+
+    #[test]
+    fn keyboard_resize_mode_moves_resizes_and_restores() {
+        use crate::core::command::CM_RESIZE;
+        use crate::core::event::{Event, EventType, KB_DOWN, KB_ESC, KB_RIGHT};
+        use crossterm::event::KeyModifiers;
+
+        let mut window = Window::new(Rect::new(10, 5, 40, 15), "Test");
+        window.set_focus(true);
+        let original = window.bounds();
+
+        // Enter keyboard move/resize mode
+        let mut ev = Event::command(CM_RESIZE);
+        window.handle_event(&mut ev);
+        assert_eq!(ev.what, EventType::Nothing);
+
+        // Arrow moves the whole window
+        let mut ev = Event::keyboard(KB_RIGHT);
+        window.handle_event(&mut ev);
+        assert_eq!(window.bounds().a.x, 11);
+        assert_eq!(window.bounds().b.x, 41);
+
+        // Shift+arrow grows the bottom-right corner
+        let mut ev = Event::keyboard(KB_DOWN);
+        ev.key_modifiers = KeyModifiers::SHIFT;
+        window.handle_event(&mut ev);
+        assert_eq!(window.bounds().b.y, 16);
+
+        // Esc restores the original bounds and leaves the mode
+        let mut ev = Event::keyboard(KB_ESC);
+        window.handle_event(&mut ev);
+        assert_eq!(window.bounds(), original);
+
+        // Mode is off: arrows no longer move the window
+        let mut ev = Event::keyboard(KB_RIGHT);
+        window.handle_event(&mut ev);
+        assert_eq!(window.bounds(), original);
     }
 }
