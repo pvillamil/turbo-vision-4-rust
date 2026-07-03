@@ -46,3 +46,11 @@ dialog.add(Box::new(gauge));
 ## License
 
 MIT, same as turbo-vision.
+
+## Examples
+
+```sh
+cargo run -p turbo-vision-extras --example extras_controls  # ComboBox, SpinControl, Slider, Gauge
+cargo run -p turbo-vision-extras --example extras_data      # GridView (100k rows), VirtualListBox (1M items)
+cargo run -p turbo-vision-extras --example extras_notebook  # Notebook, ScrollPane, popup_menu (F9)
+```
