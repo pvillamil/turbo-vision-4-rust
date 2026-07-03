@@ -309,14 +309,12 @@ impl Desktop {
             let child = self.children.child_at(i);
             let options = child.options();
             if (options & OF_TILEABLE) != 0 {
-                // Calculate new bounds with cascade offset
+                // Matches Borland doCascade: each window's origin steps down
+                // the staircase while every window extends to the rect's
+                // bottom-right corner
                 let mut new_bounds = cascade_bounds;
                 new_bounds.a.x += cascade_index as i16;
                 new_bounds.a.y += cascade_index as i16;
-
-                // Adjust size to account for offset (so window fits in desktop)
-                new_bounds.b.x -= (count - 1 - cascade_index) as i16;
-                new_bounds.b.y -= (count - 1 - cascade_index) as i16;
 
                 self.children.child_at_mut(i).set_bounds(new_bounds);
                 cascade_index += 1;
@@ -349,62 +347,71 @@ impl Desktop {
             return;
         }
 
-        // Calculate grid dimensions (most square layout)
-        let (cols, rows) = Self::calculate_grid_layout(count);
+        // Borland's exact-fill layout: mostEqualDivisors picks the grid,
+        // leftover windows get an extra row in the first columns, and
+        // dividerLoc spreads remainder cells so the rect is covered exactly
+        let (num_cols, num_rows) = Self::most_equal_divisors(count, false);
+        let left_over = count % num_cols;
 
-        let tile_bounds = rect;
-        let cell_width = tile_bounds.width() / cols as i16;
-        let cell_height = tile_bounds.height() / rows as i16;
-
-        // Position windows in grid
         let mut tile_index = 0;
         for i in 1..self.children.len() {
             let child = self.children.child_at(i);
             let options = child.options();
             if (options & OF_TILEABLE) != 0 {
-                let col = tile_index % cols;
-                let row = tile_index / cols;
-
-                let new_bounds = Rect::new(
-                    tile_bounds.a.x + (col as i16 * cell_width),
-                    tile_bounds.a.y + (row as i16 * cell_height),
-                    tile_bounds.a.x + ((col + 1) as i16 * cell_width),
-                    tile_bounds.a.y + ((row + 1) as i16 * cell_height),
-                );
-
+                let new_bounds =
+                    Self::calc_tile_rect(tile_index, rect, num_cols, num_rows, left_over);
                 self.children.child_at_mut(i).set_bounds(new_bounds);
                 tile_index += 1;
             }
         }
     }
 
-    /// Calculate grid layout (rows x cols) that's most square
+    /// Split `[lo, hi)` into `num` near-equal parts; boundary of part `pos`.
+    /// Matches Borland: dividerLoc()
+    fn divider_loc(lo: i16, hi: i16, num: usize, pos: usize) -> i16 {
+        lo + ((hi - lo) as i32 * pos as i32 / num as i32) as i16
+    }
+
+    /// Grid dimensions `(cols, rows)` as equal as possible.
     /// Matches Borland: mostEqualDivisors()
-    fn calculate_grid_layout(count: usize) -> (usize, usize) {
-        if count == 0 {
-            return (1, 1);
+    fn most_equal_divisors(n: usize, favor_y: bool) -> (usize, usize) {
+        let mut i = (n as f64).sqrt() as usize;
+        if i == 0 {
+            i = 1;
         }
-
-        // Find the square root (approximately)
-        let sqrt = (count as f64).sqrt() as usize;
-
-        // Find divisors closest to square root
-        let mut cols = sqrt;
-        while count % cols != 0 && cols > 1 {
-            cols -= 1;
+        if n % i != 0 && n % (i + 1) == 0 {
+            i += 1;
         }
-
-        if cols == 1 {
-            // Prime number or couldn't find good divisor
-            cols = sqrt;
-            if cols * cols < count {
-                cols += 1;
-            }
+        if i < n / i {
+            i = n / i;
         }
+        if favor_y { (n / i, i) } else { (i, n / i) }
+    }
 
-        let rows = (count + cols - 1) / cols; // Ceiling division
-
-        (cols, rows)
+    /// Tile cell for window `pos`. Matches Borland: calcTileRect()
+    fn calc_tile_rect(
+        pos: usize,
+        r: Rect,
+        num_cols: usize,
+        num_rows: usize,
+        left_over: usize,
+    ) -> Rect {
+        let d = (num_cols - left_over) * num_rows;
+        let (x, y, rows_here) = if pos < d {
+            (pos / num_rows, pos % num_rows, num_rows)
+        } else {
+            (
+                (pos - d) / (num_rows + 1) + (num_cols - left_over),
+                (pos - d) % (num_rows + 1),
+                num_rows + 1,
+            )
+        };
+        Rect::new(
+            Self::divider_loc(r.a.x, r.b.x, num_cols, x),
+            Self::divider_loc(r.a.y, r.b.y, rows_here, y),
+            Self::divider_loc(r.a.x, r.b.x, num_cols, x + 1),
+            Self::divider_loc(r.a.y, r.b.y, rows_here, y + 1),
+        )
     }
 
     /// Cycle to the next window (Borland: selectNext)
@@ -569,6 +576,15 @@ impl View for Desktop {
     fn handle_event(&mut self, event: &mut Event) {
         use crate::core::event::EventType;
         use crate::core::state::SF_MODAL;
+
+        // cmZoom toggles the top window between zoomed and saved bounds
+        // (Borland: TWindow::handleEvent cmZoom; here the desktop owns the
+        // maximum extent)
+        if event.what == EventType::Command && event.command == crate::core::command::CM_ZOOM {
+            self.zoom_top_window();
+            event.clear();
+            return;
+        }
 
         // Alt+1..9 window selection (Borland: TWindow handles
         // cmSelectWindowNum; here the desktop resolves the number since it
@@ -813,5 +829,50 @@ mod tests {
         desktop.handle_event(&mut event);
         assert_eq!(event.what, EventType::Broadcast);
         assert_eq!(desktop.top_view_id(), Some(id1));
+    }
+
+    #[test]
+    fn test_tile_fills_rect_exactly() {
+        use crate::core::state::OF_TILEABLE;
+
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24));
+        for i in 0..3 {
+            let mut w = Window::new(Rect::new(i, i, i + 20, i + 10), "w");
+            let opts = w.options();
+            w.set_options(opts | OF_TILEABLE);
+            desktop.add(Box::new(w));
+        }
+        desktop.tile();
+
+        // Borland layout for 3 windows: 3 columns x 1 row, no holes, and
+        // the union of cells covers the desktop exactly
+        let b0 = desktop.child_at(0).bounds();
+        let b1 = desktop.child_at(1).bounds();
+        let b2 = desktop.child_at(2).bounds();
+        assert_eq!(b0, Rect::new(0, 0, 26, 24));
+        assert_eq!(b1, Rect::new(26, 0, 53, 24));
+        assert_eq!(b2, Rect::new(53, 0, 80, 24));
+    }
+
+    #[test]
+    fn test_cascade_extends_to_corner() {
+        use crate::core::state::OF_TILEABLE;
+
+        let mut desktop = Desktop::new(Rect::new(0, 0, 80, 24));
+        for i in 0..3 {
+            let mut w = Window::new(Rect::new(i, i, i + 20, i + 10), "w");
+            let opts = w.options();
+            w.set_options(opts | OF_TILEABLE);
+            desktop.add(Box::new(w));
+        }
+        desktop.cascade();
+
+        // Each window's origin steps down the staircase; ALL extend to the
+        // rect's bottom-right corner (Borland doCascade)
+        for i in 0..3 {
+            let b = desktop.child_at(i).bounds();
+            assert_eq!((b.a.x, b.a.y), (i as i16, i as i16));
+            assert_eq!((b.b.x, b.b.y), (80, 24));
+        }
     }
 }

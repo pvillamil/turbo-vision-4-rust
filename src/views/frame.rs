@@ -166,19 +166,25 @@ impl View for Frame {
         }
 
         // Add title after close button
-        let title_display_width = self.title.width();
+        // Centered title, clamped clear of the close icon (left) and the
+        // zoom/number area (right) — matches Borland TFrame::draw:
+        // i = (width - l) >> 1 with l capped at width - 10
+        let title_display_width = self.title.width().min(width.saturating_sub(10));
         if !self.title.is_empty() && width > title_display_width + 8 {
-            buf.move_str(6, &format!(" {} ", self.title), title_attr);
-        }
-        // Window number right of the title area (Borland: TFrame::draw
-        // shows TWindow::number when 1..=9 so Alt+digit selection is visible)
-        if let Some(number) = self.number {
-            if (1..=9).contains(&number) && width > title_display_width + 12 {
-                buf.move_str(
-                    6 + title_display_width + 2,
-                    &format!(" {number} "),
-                    title_attr,
-                );
+            let text = format!(" {} ", self.title);
+            let start = ((width - title_display_width) / 2).max(6);
+            buf.move_str(start, &text, title_attr);
+
+            // Window number right of the title (Borland: TFrame::draw shows
+            // TWindow::number when 1..=9 so Alt+digit selection is visible)
+            if let Some(number) = self.number {
+                if (1..=9).contains(&number) && width > title_display_width + 12 {
+                    buf.move_str(
+                        start + title_display_width + 2,
+                        &format!(" {number} "),
+                        title_attr,
+                    );
+                }
             }
         }
         write_line_to_terminal(terminal, self.bounds.a.x, self.bounds.a.y, &buf);
@@ -241,6 +247,18 @@ impl View for Frame {
         // Note: no SF_ACTIVE gate here — the owning Window only forwards
         // events to its own frame, and an inactive window can still receive
         // the click that activates it.
+
+        // Double-click on the title row zooms the window
+        // (Borland: TFrame::handleEvent converts it to cmZoom)
+        if event.what == EventType::MouseDown
+            && (event.mouse.buttons & MB_LEFT_BUTTON) != 0
+            && event.mouse.double_click
+            && event.mouse.pos.y == self.bounds.a.y
+            && !self.is_on_close_icon(event.mouse.pos)
+        {
+            *event = crate::core::event::Event::command(crate::core::command::CM_ZOOM);
+            return;
+        }
 
         if event.what == EventType::MouseDown && (event.mouse.buttons & MB_LEFT_BUTTON) != 0 {
             let mouse_pos = event.mouse.pos;
