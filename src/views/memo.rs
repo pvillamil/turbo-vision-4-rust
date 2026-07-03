@@ -8,7 +8,7 @@ use crate::core::clipboard;
 use crate::core::draw::DrawBuffer;
 use crate::core::event::{
     Event, EventType, KB_BACKSPACE, KB_DEL, KB_DOWN, KB_END, KB_ENTER, KB_HOME, KB_LEFT, KB_PGDN,
-    KB_PGUP, KB_RIGHT, KB_TAB, KB_UP,
+    KB_PGUP, KB_RIGHT, KB_UP,
 };
 use crate::core::geometry::{Point, Rect};
 use crate::core::state::StateFlags;

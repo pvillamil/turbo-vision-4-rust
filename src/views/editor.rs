@@ -976,7 +976,7 @@ impl EditorWindow {
         };
 
         // Step left once (wrapping to the previous line end)
-        let mut step_left = |x: &mut i32, y: &mut i32| -> bool {
+        let step_left = |x: &mut i32, y: &mut i32| -> bool {
             if *x > 0 {
                 *x -= 1;
                 true
