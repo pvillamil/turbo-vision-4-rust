@@ -5,6 +5,89 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.0.0] - 2026-07-02
+
+Full code review against the kloczek/tvision C++ reference, with all critical
+(P0), high (P1), and medium (P2) findings fixed. See TO-DO.md for the
+itemized checklist.
+
+### Breaking
+- **Standard command IDs renumbered to Borland's values** (`cmQuit=1`,
+  `cmClose=4`, `cmZoom=5`, `cmResize=6`, `cmNext=7`, `cmPrev=8`,
+  `cmCut/Copy/Paste/Undo=20-23`, `cmClear=24`, `cmTile=25`, `cmCascade=26`,
+  `cmRecordHistory=60`, `cmGrabDefault/cmReleaseDefault=61/62`,
+  `cmFileFocused/cmFileDoubleClicked=102/103`). Demo file-menu commands moved
+  to 300-305. Code that uses the `CM_*` constants is unaffected.
+- `KB_CTRL_F12` corrected to the BIOS scan code `0x8A00`.
+- **SSH server authentication is now deny-by-default**: configure
+  `SshServerConfig::auth_password_fn` / `auth_publickey_fn`, or opt into the
+  old accept-everything behavior explicitly with `allow_anonymous()`.
+- `Scroller::set_limit` follows Borland semantics: the maximum scroll offset
+  is content size minus one page.
+- Saving an editor buffer appends a POSIX trailing newline for programmatic
+  content and preserves the loaded file's CRLF/trailing-newline style.
+- `Event` gained an `info: u16` field (Borland `infoPtr` equivalent) used by
+  several new broadcasts.
+
+### Fixed
+- **UTF-8 safety**: InputLine, editor search, Memo selection, ParamText,
+  TerminalWidget, and SortedListBox no longer mix byte and character
+  indices — multibyte text (e.g. pasting "é") previously panicked.
+- **Editor**: Enter and line-join deletions are undoable; overwrite mode is a
+  single undo step; `replace_all` no longer loops forever when the
+  replacement contains the pattern; `find_next` no longer skips adjacent
+  matches; search matches Borland's non-wrapping behavior.
+- **Event routing**: clicks that hit no child are no longer delivered to the
+  focused control; broadcasts reach every child; removing the focused child
+  re-establishes focus; the focus chain skips disabled children and never
+  strands focus.
+- **Windows**: `SF_ACTIVE` propagates so inactive windows draw with the
+  inactive palette; auto-close honors `valid(cmClose)`; modal views are
+  tracked by identity (not index); `valid(endState)` re-entry lets failing
+  validators veto OK; frame close button tracks press+release; frame titles
+  are centered; per-child grow modes (`GF_GROW_*`) with Borland `calcBounds`.
+- **Dialogs/controls**: Enter presses the focused button (grab-default
+  semantics); disabled commands no longer fire from the status line or menu
+  boxes; menu dropdown hit-testing uses real widths; buttons fire on release
+  (cancellable by dragging off); radio buttons are mutually exclusive;
+  checkboxes/radios respond to the mouse; ColorDialog returns the actual
+  selection; SortedListBox has incremental type-to-search; menu item
+  shortcuts (F2, ...) dispatch while the bar is closed.
+- **Validators**: PictureValidator is a complete TPXPictureValidator port
+  (`#?&@!`, `;` escapes, `{}`/`[]` groups, `*N` repetition, `,` alternatives)
+  with auto-fill wired into InputLine typing; InputLine validators can veto
+  dialog close.
+- **File dialog**: typed paths (e.g. `src/main.rs`) return the file instead
+  of being discarded; wildcard filtering is a real glob (`*`/`?`).
+- **Palettes**: restored three zeroed bytes in the app palette, remapped
+  `CP_BLUE_DIALOG` to a proper blue region, corrected `CP_CLUSTER`.
+- **SSH/terminal**: `poll_event` honors its timeout (no more 100% CPU per
+  session); dead backends stop the app instead of spinning; client window
+  resizes reach the layout; the input parser survives partial X10 mouse
+  sequences and caps unterminated CSI buffering; `set_esc_timeout` works.
+- **Desktop**: tile uses Borland's exact-fill algorithm; cascade extends all
+  windows to the corner; quit during a modal loop returns `cmQuit`.
+- Parallel test runs no longer segfault (OS clipboard access serialized and
+  skipped under tests) or flake on the global history manager.
+
+### Added
+- History system wired end-to-end: the History button opens its popup,
+  dialog OK records the linked InputLine text (`cmRecordHistory`), and the
+  selected entry is copied back.
+- `Application::put_event` (Borland `putEvent` pending-event slot).
+- Alt+1..9 window selection (`cmSelectWindowNum`), window numbers drawn in
+  the frame, `Window::set_number`.
+- `cmZoom` dispatch with double-click-title zoom; `cmResize` keyboard
+  move/resize mode (arrows move, Shift+arrows resize, Enter/Esc).
+- `StatusLine::with_defs` + `update()`: Borland TStatusDef item sets that
+  switch with the help context (`Application::set_help_context`).
+- Editor word operations (Ctrl+arrows, Ctrl+Backspace/Del), Ins overwrite
+  toggle, opt-in `.bak` backups (`set_backup_files`).
+- InputLine select-all-on-focus, Shift+arrow selection, Ins overwrite mode.
+- `Menu::find_hotkey`, `Validator::complete`, `Backend::as_any_mut`,
+  `Desktop::top_view_id`/`child_by_id`/`remove_child_by_id`,
+  `CM_SCROLLBAR_CHANGED`, `SshAuthPolicy`.
+
 ## [1.3.1] - 2026-06-07
 
 ### Fixed
