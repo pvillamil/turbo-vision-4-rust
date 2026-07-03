@@ -43,6 +43,7 @@ pub const CM_RECORD_HISTORY: CommandId = 60; // Broadcast on dialog OK — Histo
 pub const CM_GRAB_DEFAULT: CommandId = 61; // Borland: cmGrabDefault
 pub const CM_RELEASE_DEFAULT: CommandId = 62; // Borland: cmReleaseDefault
 pub const CM_SCROLLBAR_CHANGED: CommandId = 57; // Borland: cmScrollBarChanged (new value in event.info, clamped to u16)
+pub const CM_SELECT_WINDOW_NUM: CommandId = 55; // Borland: cmSelectWindowNum (window number in event.info)
 
 // Standard dialog broadcast commands (Borland stddlg.h values)
 pub const CM_FILE_FOCUSED: CommandId = 102; // Borland: cmFileFocused - file dialog selection changed

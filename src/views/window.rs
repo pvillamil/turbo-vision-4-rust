@@ -26,6 +26,9 @@ pub struct Window {
     resize_start_size: Option<Point>,
     /// Minimum window size (matches Borland's minWinSize)
     min_size: Point,
+    /// Window number for Alt+1..9 selection (Borland: TWindow::number;
+    /// None = wnNoNumber)
+    number: Option<u8>,
     /// Saved bounds for zoom/restore (matches Borland's zoomRect)
     zoom_rect: Rect,
     /// Previous bounds (for calculating union rect for redrawing)
@@ -135,8 +138,9 @@ impl Window {
             options: OF_SELECTABLE | OF_TOP_SELECT | OF_TILEABLE, // Matches Borland: TWindow/TEditWindow flags
             drag_offset: None,
             resize_start_size: None,
-            min_size: Point::new(16, 6), // Minimum size: 16 wide, 6 tall (matches Borland's minWinSize)
-            zoom_rect: bounds,           // Initialize to current bounds
+            min_size: Point::new(16, 6),
+            number: None, // Minimum size: 16 wide, 6 tall (matches Borland's minWinSize)
+            zoom_rect: bounds, // Initialize to current bounds
             prev_bounds: None,
             palette_chain: None,
             palette_type: window_palette,
@@ -397,6 +401,18 @@ impl Window {
 
     /// End the modal event loop
     /// Delegates to the interior Group's end_modal() method
+    /// Set the window number shown in the frame and used by Alt+1..9
+    /// selection (Borland: TWindow::number).
+    pub fn set_number(&mut self, number: u8) {
+        self.number = Some(number);
+        self.frame.set_number(Some(number));
+    }
+
+    /// Get the window number, if assigned.
+    pub fn number(&self) -> Option<u8> {
+        self.number
+    }
+
     pub fn end_modal(&mut self, command: crate::core::command::CommandId) {
         self.interior.end_modal(command);
     }
@@ -700,6 +716,10 @@ impl View for Window {
 
     fn set_options(&mut self, options: u16) {
         self.options = options;
+    }
+
+    fn window_number(&self) -> Option<u8> {
+        self.number
     }
 
     fn get_end_state(&self) -> crate::core::command::CommandId {

@@ -15,6 +15,9 @@ use unicode_width::UnicodeWidthStr;
 pub struct Frame {
     bounds: Rect,
     title: String,
+    /// Window number shown right of the title (Borland: TFrame draws
+    /// TWindow::number for Alt+1..9 selection); None = not numbered
+    number: Option<u8>,
     /// Palette type — retained for API compatibility.
     #[allow(dead_code)]
     palette_type: FramePaletteType,
@@ -52,6 +55,7 @@ impl Frame {
         Self {
             bounds,
             title: title.to_string(),
+            number: None,
             palette_type,
             state: SF_ACTIVE,
             resizable,
@@ -75,6 +79,11 @@ impl Frame {
     /// Matches Borland: TFrame::setTitle() allows changing window title dynamically
     pub fn set_title(&mut self, title: &str) {
         self.title = title.to_string();
+    }
+
+    /// Set the window number displayed in the frame (Borland: TWindow::number).
+    pub fn set_number(&mut self, number: Option<u8>) {
+        self.number = number;
     }
 
     /// Get colors for frame elements based on palette type and state
@@ -160,6 +169,17 @@ impl View for Frame {
         let title_display_width = self.title.width();
         if !self.title.is_empty() && width > title_display_width + 8 {
             buf.move_str(6, &format!(" {} ", self.title), title_attr);
+        }
+        // Window number right of the title area (Borland: TFrame::draw
+        // shows TWindow::number when 1..=9 so Alt+digit selection is visible)
+        if let Some(number) = self.number {
+            if (1..=9).contains(&number) && width > title_display_width + 12 {
+                buf.move_str(
+                    6 + title_display_width + 2,
+                    &format!(" {number} "),
+                    title_attr,
+                );
+            }
         }
         write_line_to_terminal(terminal, self.bounds.a.x, self.bounds.a.y, &buf);
 

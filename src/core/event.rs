@@ -73,6 +73,17 @@ pub const KB_ALT_W: KeyCode = 0x1100;
 pub const KB_ALT_X: KeyCode = 0x2D00;
 pub const KB_ALT_Y: KeyCode = 0x1500;
 pub const KB_ALT_Z: KeyCode = 0x2C00;
+// Alt + digit (BIOS scan codes) — window selection (Borland cmSelectWindowNum)
+pub const KB_ALT_1: KeyCode = 0x7800;
+pub const KB_ALT_2: KeyCode = 0x7900;
+pub const KB_ALT_3: KeyCode = 0x7A00;
+pub const KB_ALT_4: KeyCode = 0x7B00;
+pub const KB_ALT_5: KeyCode = 0x7C00;
+pub const KB_ALT_6: KeyCode = 0x7D00;
+pub const KB_ALT_7: KeyCode = 0x7E00;
+pub const KB_ALT_8: KeyCode = 0x7F00;
+pub const KB_ALT_9: KeyCode = 0x8000;
+
 pub const KB_ALT_F1: KeyCode = 0x6800; // Alt+F1 for help history back
 pub const KB_ALT_F3: KeyCode = 0x6A00;
 
@@ -327,6 +338,15 @@ impl fmt::Display for Event {
 /// Returns None if the character is not a letter
 fn char_to_alt_code(c: char) -> Option<KeyCode> {
     match c {
+        '1' => Some(KB_ALT_1),
+        '2' => Some(KB_ALT_2),
+        '3' => Some(KB_ALT_3),
+        '4' => Some(KB_ALT_4),
+        '5' => Some(KB_ALT_5),
+        '6' => Some(KB_ALT_6),
+        '7' => Some(KB_ALT_7),
+        '8' => Some(KB_ALT_8),
+        '9' => Some(KB_ALT_9),
         'a' => Some(KB_ALT_A),
         'b' => Some(KB_ALT_B),
         'c' => Some(KB_ALT_C),

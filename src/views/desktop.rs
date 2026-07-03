@@ -570,6 +570,26 @@ impl View for Desktop {
         use crate::core::event::EventType;
         use crate::core::state::SF_MODAL;
 
+        // Alt+1..9 window selection (Borland: TWindow handles
+        // cmSelectWindowNum; here the desktop resolves the number since it
+        // owns z-order and focus)
+        if event.what == EventType::Broadcast
+            && event.command == crate::core::command::CM_SELECT_WINDOW_NUM
+        {
+            let wanted = event.info as u8;
+            let count = self.child_count();
+            for i in 0..count {
+                if self.child_at(i).window_number() == Some(wanted) {
+                    if let Some(id) = self.children.view_id_at(i + 1) {
+                        self.bring_to_front(id);
+                        event.clear();
+                    }
+                    return;
+                }
+            }
+            return;
+        }
+
         // Check if the topmost window is modal
         // Modal windows capture all events - clicks on other windows have no effect
         // Matches Borland: TGroup::execView() creates modal scope
@@ -767,5 +787,31 @@ mod tests {
         assert!(desktop.remove_child_by_id(modal_id));
         assert!(!desktop.contains_id(modal_id));
         assert_eq!(desktop.top_view_id(), None);
+    }
+
+    #[test]
+    fn test_alt_digit_selects_numbered_window() {
+        use crate::core::command::CM_SELECT_WINDOW_NUM;
+        use crate::core::event::{Event, EventType};
+
+        let mut desktop = Desktop::new(Rect::new(0, 1, 80, 24));
+        let mut w1 = Window::new(Rect::new(5, 5, 30, 15), "One");
+        w1.set_number(1);
+        let mut w2 = Window::new(Rect::new(10, 6, 35, 16), "Two");
+        w2.set_number(2);
+        let id1 = desktop.add(Box::new(w1));
+        let _id2 = desktop.add(Box::new(w2));
+
+        // Window 2 is on top; broadcast selects window 1
+        let mut event = Event::broadcast_with_info(CM_SELECT_WINDOW_NUM, 1);
+        desktop.handle_event(&mut event);
+        assert_eq!(event.what, EventType::Nothing);
+        assert_eq!(desktop.top_view_id(), Some(id1));
+
+        // Unknown number leaves the event unconsumed and z-order unchanged
+        let mut event = Event::broadcast_with_info(CM_SELECT_WINDOW_NUM, 7);
+        desktop.handle_event(&mut event);
+        assert_eq!(event.what, EventType::Broadcast);
+        assert_eq!(desktop.top_view_id(), Some(id1));
     }
 }

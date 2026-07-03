@@ -28,6 +28,9 @@ pub struct Application {
     pub desktop: Desktop,
     pub running: bool,
     needs_redraw: bool, // Track if full redraw is needed
+    /// One-slot pending event queue (Borland: TProgram::putEvent/pending):
+    /// returned by the event loops before polling the terminal
+    pending_event: Option<Event>,
     /// Overlay widgets that need idle processing and are drawn on top of everything
     /// These widgets continue to animate even during modal dialogs
     /// Matches Borland: TProgram::idle() continues running during execView()
@@ -90,6 +93,7 @@ impl Application {
             desktop,
             running: true,
             needs_redraw: true, // Initial draw needed
+            pending_event: None,
             overlay_widgets: Vec::new(),
             help_file: None,
             help_context: HelpContext::new(),
@@ -260,7 +264,19 @@ impl Application {
     /// A `poll_event` error means the backend connection is gone (e.g. the
     /// SSH client disconnected); swallowing it would leave the event loop
     /// spinning forever on a dead session.
+    /// Queue an event to be returned before the next terminal poll.
+    ///
+    /// Matches Borland TProgram::putEvent: a single-slot pending event that
+    /// the event loops consume first (used e.g. to re-enter a command from
+    /// event handlers).
+    pub fn put_event(&mut self, event: Event) {
+        self.pending_event = Some(event);
+    }
+
     fn poll_event_or_quit(&mut self) -> Option<Event> {
+        if let Some(pending) = self.pending_event.take() {
+            return Some(pending);
+        }
         match self.terminal.poll_event(Duration::from_millis(20)) {
             Ok(event) => event,
             Err(err) => {
@@ -517,6 +533,13 @@ impl Application {
                     self.take_screenshot();
                     event.clear();
                     return;
+                }
+                code @ crate::core::event::KB_ALT_1..=crate::core::event::KB_ALT_9 => {
+                    // Alt+digit selects the numbered window
+                    // (Borland: TProgram::handleEvent -> cmSelectWindowNum)
+                    let num = ((code - crate::core::event::KB_ALT_1) >> 8) as u16 + 1;
+                    *event =
+                        Event::broadcast_with_info(crate::core::command::CM_SELECT_WINDOW_NUM, num);
                 }
                 _ => {}
             }

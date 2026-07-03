@@ -75,6 +75,13 @@ pub trait View {
         self.set_state_flag(SF_FOCUSED, focused);
     }
 
+    /// Window number for Alt+1..9 selection (Borland: TWindow::number).
+    ///
+    /// `None` for views that aren't numbered windows (Borland wnNoNumber).
+    fn window_number(&self) -> Option<u8> {
+        None
+    }
+
     /// Check if view is focused - reads SF_FOCUSED flag
     fn is_focused(&self) -> bool {
         self.get_state_flag(SF_FOCUSED)
