@@ -149,6 +149,12 @@ pub struct EditorWindow {
     last_search_options: SearchOptions,
     // File state (matching Borland's TFileEditor)
     filename: Option<String>,
+    // Line-ending fidelity: remembered on load, reapplied on save
+    trailing_newline: bool,
+    crlf_line_endings: bool,
+    // When set, saving renames the existing file to "<name>.bak" first
+    // (Borland: efBackupFiles + backupExt)
+    backup_files: bool,
     // Syntax highlighting
     highlighter: Option<Box<dyn SyntaxHighlighter>>,
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
@@ -177,6 +183,9 @@ impl EditorWindow {
             last_search: String::new(),
             last_search_options: SearchOptions::new(),
             filename: None,
+            trailing_newline: true,
+            crlf_line_endings: false,
+            backup_files: false,
             highlighter: None,
             palette_chain: None,
         }
@@ -242,6 +251,8 @@ impl EditorWindow {
 
     /// Set the text content
     pub fn set_text(&mut self, text: &str) {
+        // .lines() strips \r\n and \n; line-ending style is tracked
+        // separately (trailing_newline / crlf_line_endings) for saving
         self.lines = text.lines().map(|s| s.to_string()).collect();
         if self.lines.is_empty() {
             self.lines.push(String::new());
@@ -314,6 +325,8 @@ impl EditorWindow {
     pub fn load_file(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let path_ref = path.as_ref();
         let content = std::fs::read_to_string(path_ref)?;
+        self.trailing_newline = content.is_empty() || content.ends_with('\n');
+        self.crlf_line_endings = content.contains("\r\n");
         self.set_text(&content);
         self.filename = Some(path_ref.to_string_lossy().to_string());
         self.modified = false;
@@ -340,12 +353,30 @@ impl EditorWindow {
     /// Matches Borland's TFileEditor::saveAs()
     pub fn save_as(&mut self, path: impl AsRef<std::path::Path>) -> std::io::Result<()> {
         let path_ref = path.as_ref();
-        let content = self.get_text();
+
+        // Optional Borland-style backup: rename the old file to "<name>.bak"
+        if self.backup_files && path_ref.exists() {
+            let mut backup = path_ref.as_os_str().to_owned();
+            backup.push(".bak");
+            let _ = std::fs::rename(path_ref, std::path::Path::new(&backup));
+        }
+
+        // Reapply the line-ending style remembered at load time
+        let newline = if self.crlf_line_endings { "\r\n" } else { "\n" };
+        let mut content = self.lines.join(newline);
+        if self.trailing_newline && !self.lines.is_empty() {
+            content.push_str(newline);
+        }
         std::fs::write(path_ref, content)?;
         self.filename = Some(path_ref.to_string_lossy().to_string());
         self.modified = false;
         self.update_indicator();
         Ok(())
+    }
+
+    /// Enable or disable Borland-style .bak backups on save.
+    pub fn set_backup_files(&mut self, backup: bool) {
+        self.backup_files = backup;
     }
 
     /// Get the current filename, if any
@@ -930,6 +961,148 @@ impl EditorWindow {
         for _ in 0..self.tab_size {
             self.insert_char(' ');
         }
+    }
+
+    /// Position of the previous word boundary (crossing line breaks).
+    ///
+    /// Matches Borland TEditor::prevWord: skip separators leftwards, then
+    /// skip the word the cursor lands in.
+    fn word_left_pos(&self) -> Point {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let (mut x, mut y) = (self.cursor.x as i32, self.cursor.y as i32);
+
+        let char_at = |lines: &Vec<String>, y: i32, x: i32| -> Option<char> {
+            lines[y as usize].chars().nth(x as usize)
+        };
+
+        // Step left once (wrapping to the previous line end)
+        let mut step_left = |x: &mut i32, y: &mut i32| -> bool {
+            if *x > 0 {
+                *x -= 1;
+                true
+            } else if *y > 0 {
+                *y -= 1;
+                *x = self.lines[*y as usize].chars().count() as i32;
+                true
+            } else {
+                false
+            }
+        };
+
+        // Skip separators (including line breaks)
+        loop {
+            if !step_left(&mut x, &mut y) {
+                return Point::new(x as i16, y as i16);
+            }
+            if char_at(&self.lines, y, x).is_some_and(is_word) {
+                break;
+            }
+            if x == 0 && y == 0 {
+                return Point::new(0, 0);
+            }
+        }
+        // Skip the word itself
+        while x > 0 {
+            if char_at(&self.lines, y, x - 1).is_some_and(is_word) {
+                x -= 1;
+            } else {
+                break;
+            }
+        }
+        Point::new(x as i16, y as i16)
+    }
+
+    /// Position of the next word boundary (crossing line breaks).
+    ///
+    /// Matches Borland TEditor::nextWord: skip the current word, then skip
+    /// separators to the start of the next word.
+    fn word_right_pos(&self) -> Point {
+        let is_word = |c: char| c.is_alphanumeric() || c == '_';
+        let (mut x, mut y) = (self.cursor.x as i32, self.cursor.y as i32);
+        let last_line = self.lines.len() as i32 - 1;
+
+        let line_len = |lines: &Vec<String>, y: i32| lines[y as usize].chars().count() as i32;
+        let char_at = |lines: &Vec<String>, y: i32, x: i32| -> Option<char> {
+            lines[y as usize].chars().nth(x as usize)
+        };
+
+        // Skip the word under the cursor
+        while x < line_len(&self.lines, y) && char_at(&self.lines, y, x).is_some_and(is_word) {
+            x += 1;
+        }
+        // Skip separators (including line breaks) to the next word start
+        loop {
+            if x >= line_len(&self.lines, y) {
+                if y >= last_line {
+                    return Point::new(line_len(&self.lines, y) as i16, y as i16);
+                }
+                y += 1;
+                x = 0;
+            } else if char_at(&self.lines, y, x).is_some_and(is_word) {
+                return Point::new(x as i16, y as i16);
+            } else {
+                x += 1;
+            }
+        }
+    }
+
+    /// Move the cursor one word left/right, optionally extending selection.
+    fn move_word(&mut self, right: bool, extend_selection: bool) {
+        if extend_selection {
+            if self.selection_start.is_none() {
+                self.selection_start = Some(self.cursor);
+            }
+        } else {
+            self.selection_start = None;
+        }
+        self.cursor = if right {
+            self.word_right_pos()
+        } else {
+            self.word_left_pos()
+        };
+        self.ensure_cursor_visible();
+    }
+
+    /// Extract the text between two positions (for word-delete undo records).
+    fn text_between(&self, from: Point, to: Point) -> String {
+        let mut out = String::new();
+        let (mut x, mut y) = (from.x as usize, from.y as usize);
+        while (y as i16, x as i16) < (to.y, to.x) {
+            let line = &self.lines[y];
+            if x >= line.chars().count() {
+                out.push('\n');
+                y += 1;
+                x = 0;
+            } else {
+                out.push(line.chars().nth(x).expect("in range"));
+                x += 1;
+            }
+        }
+        out
+    }
+
+    /// Delete from the cursor to the previous/next word boundary as one
+    /// undoable step (Borland: cmDelWord / Ctrl+Backspace).
+    fn delete_word(&mut self, right: bool) {
+        if self.read_only {
+            return;
+        }
+        let (from, to) = if right {
+            (self.cursor, self.word_right_pos())
+        } else {
+            (self.word_left_pos(), self.cursor)
+        };
+        if from == to {
+            return;
+        }
+        let text = self.text_between(from, to);
+        self.selection_start = Some(from);
+        self.cursor = to;
+        self.delete_selection_internal();
+        self.cursor = from;
+        self.selection_start = None;
+        self.push_undo(EditAction::DeleteText { pos: from, text });
+        self.ensure_cursor_visible();
     }
 
     fn move_cursor(&mut self, dx: i16, dy: i16, extend_selection: bool) {
@@ -1582,13 +1755,28 @@ impl View for EditorWindow {
                     event.clear();
                 }
                 KB_LEFT => {
-                    // Move left (previous character), wrapping to previous line if at start
-                    self.move_cursor_left(shift_pressed);
+                    if event.key_modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+Left: previous word (Borland cmWordLeft)
+                        self.move_word(false, shift_pressed);
+                    } else {
+                        // Move left (previous character), wrapping to previous line if at start
+                        self.move_cursor_left(shift_pressed);
+                    }
                     event.clear();
                 }
                 KB_RIGHT => {
-                    // Move right (following character), wrapping to following line if at end
-                    self.move_cursor_right(shift_pressed);
+                    if event.key_modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+Right: next word (Borland cmWordRight)
+                        self.move_word(true, shift_pressed);
+                    } else {
+                        // Move right (following character), wrapping to following line if at end
+                        self.move_cursor_right(shift_pressed);
+                    }
+                    event.clear();
+                }
+                crate::core::event::KB_INS => {
+                    // Toggle insert/overwrite mode (Borland cmInsMode)
+                    self.toggle_insert_mode();
                     event.clear();
                 }
                 KB_HOME => {
@@ -1634,7 +1822,10 @@ impl View for EditorWindow {
                     event.clear();
                 }
                 KB_BACKSPACE => {
-                    if self.has_selection() {
+                    if event.key_modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+Backspace: delete previous word
+                        self.delete_word(false);
+                    } else if self.has_selection() {
                         self.delete_selection();
                     } else {
                         self.backspace();
@@ -1642,7 +1833,10 @@ impl View for EditorWindow {
                     event.clear();
                 }
                 KB_DEL => {
-                    if self.has_selection() {
+                    if event.key_modifiers.contains(KeyModifiers::CONTROL) {
+                        // Ctrl+Del: delete next word (Borland cmDelWord)
+                        self.delete_word(true);
+                    } else if self.has_selection() {
                         self.delete_selection();
                     } else {
                         self.delete_char();
@@ -1779,7 +1973,8 @@ mod tests {
         editor.save_as(path).unwrap();
 
         let content = std::fs::read_to_string(path).unwrap();
-        assert_eq!(content, "Hello\nWorld");
+        // Saves append a trailing newline by default (POSIX text files)
+        assert_eq!(content, "Hello\nWorld\n");
         assert_eq!(editor.get_filename(), Some(path));
         assert!(!editor.is_modified());
     }
@@ -1806,7 +2001,7 @@ mod tests {
         editor.save_file().unwrap();
 
         let content = std::fs::read_to_string(path).unwrap();
-        assert_eq!(content, "Modified content");
+        assert_eq!(content, "Modified content\n");
         assert!(!editor.is_modified());
     }
 
@@ -2050,5 +2245,101 @@ mod tests {
         assert_eq!((second.x, second.y), (2, 0));
         // No wrap-around: Borland's search stops at end of document
         assert!(editor.find_next().is_none());
+    }
+
+    #[test]
+    fn word_movement_crosses_lines() {
+        use crossterm::event::KeyModifiers;
+
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("foo bar\nbaz");
+        editor.set_focus(true);
+        editor.cursor = Point::new(0, 0);
+
+        // Ctrl+Right: foo| -> bar| -> next line baz
+        let mut ev = Event::keyboard(KB_RIGHT);
+        ev.key_modifiers = KeyModifiers::CONTROL;
+        editor.handle_event(&mut ev);
+        assert_eq!((editor.cursor.x, editor.cursor.y), (4, 0)); // start of "bar"
+
+        let mut ev = Event::keyboard(KB_RIGHT);
+        ev.key_modifiers = KeyModifiers::CONTROL;
+        editor.handle_event(&mut ev);
+        assert_eq!((editor.cursor.x, editor.cursor.y), (0, 1)); // start of "baz"
+
+        // Ctrl+Left goes back to "bar"
+        let mut ev = Event::keyboard(KB_LEFT);
+        ev.key_modifiers = KeyModifiers::CONTROL;
+        editor.handle_event(&mut ev);
+        assert_eq!((editor.cursor.x, editor.cursor.y), (4, 0));
+    }
+
+    #[test]
+    fn delete_word_is_single_undo_step() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("foo bar baz");
+        editor.cursor = Point::new(4, 0); // start of "bar"
+
+        editor.delete_word(true); // deletes "bar " up to "baz"
+        assert_eq!(editor.get_text(), "foo baz");
+        editor.undo();
+        assert_eq!(editor.get_text(), "foo bar baz");
+
+        // Backwards: cursor after "bar ", delete previous word
+        editor.cursor = Point::new(8, 0); // start of "baz"
+        editor.delete_word(false);
+        assert_eq!(editor.get_text(), "foo baz");
+        editor.undo();
+        assert_eq!(editor.get_text(), "foo bar baz");
+    }
+
+    #[test]
+    fn ins_key_toggles_overwrite() {
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.set_text("abc");
+        editor.set_focus(true);
+        editor.cursor = Point::new(0, 0);
+
+        let mut ev = Event::keyboard(crate::core::event::KB_INS);
+        editor.handle_event(&mut ev);
+        let mut ev = Event::keyboard('X' as u16);
+        editor.handle_event(&mut ev);
+        assert_eq!(editor.get_text(), "Xbc");
+    }
+
+    #[test]
+    fn save_preserves_line_ending_style() {
+        use std::io::Write;
+        let mut file = NamedTempFile::new().unwrap();
+        // CRLF file without trailing newline
+        write!(file, "one\r\ntwo").unwrap();
+        file.flush().unwrap();
+
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.load_file(file.path().to_str().unwrap()).unwrap();
+        assert_eq!(editor.get_text(), "one\ntwo");
+
+        let out = NamedTempFile::new().unwrap();
+        editor.save_as(out.path().to_str().unwrap()).unwrap();
+        let round = std::fs::read_to_string(out.path()).unwrap();
+        // CRLF endings and missing trailing newline both preserved
+        assert_eq!(round, "one\r\ntwo");
+    }
+
+    #[test]
+    fn backup_files_creates_bak() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("data.txt");
+        std::fs::write(&path, "old contents\n").unwrap();
+
+        let mut editor = EditorWindow::new(Rect::new(0, 0, 80, 25));
+        editor.load_file(path.to_str().unwrap()).unwrap();
+        editor.set_backup_files(true);
+        editor.insert_char('x');
+        editor.save_file().unwrap();
+
+        let bak = dir.path().join("data.txt.bak");
+        assert_eq!(std::fs::read_to_string(&bak).unwrap(), "old contents\n");
+        assert!(std::fs::read_to_string(&path).unwrap().starts_with('x'));
     }
 }

@@ -43,6 +43,7 @@ pub struct InputLine {
     sel_end: usize,                  // Selection end position (characters)
     first_pos: usize,                // First visible character position for horizontal scrolling
     validator: Option<ValidatorRef>, // Optional validator for input validation
+    insert_mode: bool,               // Ins toggles; overwrite replaces at cursor
     state: StateFlags,               // View state flags (including SF_FOCUSED)
     palette_chain: Option<crate::core::palette_chain::PaletteChainNode>,
 }
@@ -59,6 +60,7 @@ impl InputLine {
             sel_end: 0,
             first_pos: 0,
             validator: None,
+            insert_mode: true,
             state: 0,
             palette_chain: None,
         }
@@ -302,22 +304,58 @@ impl View for InputLine {
                     }
                 }
                 KB_LEFT => {
+                    let shift = event
+                        .key_modifiers
+                        .contains(crossterm::event::KeyModifiers::SHIFT);
                     if self.cursor_pos > 0 {
-                        self.cursor_pos -= 1;
+                        if shift {
+                            // Anchor the selection at the old cursor position
+                            if !self.has_selection() {
+                                self.sel_start = self.cursor_pos;
+                            }
+                            self.cursor_pos -= 1;
+                            self.sel_end = self.cursor_pos;
+                        } else {
+                            self.cursor_pos -= 1;
+                            self.sel_start = 0;
+                            self.sel_end = 0;
+                        }
+                        self.make_cursor_visible();
+                        event.clear();
+                    } else if !shift && self.has_selection() {
                         self.sel_start = 0;
                         self.sel_end = 0;
-                        self.make_cursor_visible();
                         event.clear();
                     }
                 }
                 KB_RIGHT => {
+                    let shift = event
+                        .key_modifiers
+                        .contains(crossterm::event::KeyModifiers::SHIFT);
                     if self.cursor_pos < char_len(&self.data.borrow()) {
-                        self.cursor_pos += 1;
-                        self.sel_start = 0;
-                        self.sel_end = 0;
+                        if shift {
+                            if !self.has_selection() {
+                                self.sel_start = self.cursor_pos;
+                            }
+                            self.cursor_pos += 1;
+                            self.sel_end = self.cursor_pos;
+                        } else {
+                            self.cursor_pos += 1;
+                            self.sel_start = 0;
+                            self.sel_end = 0;
+                        }
                         self.make_cursor_visible();
                         event.clear();
+                    } else if !shift && self.has_selection() {
+                        self.sel_start = 0;
+                        self.sel_end = 0;
+                        event.clear();
                     }
+                }
+                crate::core::event::KB_INS => {
+                    // Toggle insert/overwrite (Borland: sfCursorIns)
+                    self.insert_mode = !self.insert_mode;
+                    event.clear();
                 }
                 KB_HOME => {
                     self.cursor_pos = 0;
@@ -410,10 +448,14 @@ impl View for InputLine {
                                 }
                             }
 
-                            // Character is valid, insert it
+                            // Character is valid, insert it (overwrite mode
+                            // replaces the character under the cursor)
                             {
                                 let mut text = self.data.borrow_mut();
                                 let at = byte_offset(&text, self.cursor_pos);
+                                if !self.insert_mode && self.cursor_pos < char_len(&text) {
+                                    text.remove(at);
+                                }
                                 text.insert(at, ch);
                             }
                             self.cursor_pos += 1;
@@ -451,6 +493,20 @@ impl View for InputLine {
 
     fn can_focus(&self) -> bool {
         true
+    }
+
+    /// Select all text when the field gains focus (Borland:
+    /// TInputLine::setState(sfSelected) selects the content so typing
+    /// replaces it); losing focus collapses the selection.
+    fn set_focus(&mut self, focused: bool) {
+        let was_focused = self.is_focused();
+        self.set_state_flag(crate::core::state::SF_FOCUSED, focused);
+        if focused && !was_focused {
+            self.select_all();
+        } else if !focused {
+            self.sel_start = 0;
+            self.sel_end = 0;
+        }
     }
 
     /// Validate on modal close (Borland: TInputLine::valid via checkValid).
@@ -753,5 +809,66 @@ mod tests {
         use crate::core::command::{CM_CANCEL, CM_OK};
         assert!(!View::valid(&mut input, CM_OK));
         assert!(View::valid(&mut input, CM_CANCEL));
+    }
+
+    #[test]
+    fn focus_selects_all_and_typing_replaces() {
+        let data = Rc::new(RefCell::new("hello".to_string()));
+        let mut input = InputLine::new(Rect::new(0, 0, 20, 1), 10, data.clone());
+        input.set_focus(true);
+        assert_eq!(input.get_selection().as_deref(), Some("hello"));
+
+        let mut ev = Event::keyboard('x' as u16);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "x");
+
+        // Losing focus collapses any selection
+        input.select_all();
+        input.set_focus(false);
+        assert!(!input.has_selection());
+    }
+
+    #[test]
+    fn shift_arrows_extend_selection() {
+        use crossterm::event::KeyModifiers;
+
+        let (mut input, _data) = make("abcd");
+        // Collapse the focus-selection and put the cursor at the end
+        let mut ev = Event::keyboard(KB_RIGHT);
+        input.handle_event(&mut ev);
+
+        let mut ev = Event::keyboard(KB_LEFT);
+        ev.key_modifiers = KeyModifiers::SHIFT;
+        input.handle_event(&mut ev);
+        let mut ev = Event::keyboard(KB_LEFT);
+        ev.key_modifiers = KeyModifiers::SHIFT;
+        input.handle_event(&mut ev);
+        assert_eq!(input.get_selection().as_deref(), Some("cd"));
+
+        // Plain arrow collapses the selection
+        let mut ev = Event::keyboard(KB_RIGHT);
+        input.handle_event(&mut ev);
+        assert!(!input.has_selection());
+    }
+
+    #[test]
+    fn ins_toggles_overwrite_mode() {
+        let (mut input, data) = make("abc");
+        // Move cursor to start (collapse focus selection first)
+        let mut ev = Event::keyboard(crate::core::event::KB_HOME);
+        input.handle_event(&mut ev);
+
+        let mut ev = Event::keyboard(crate::core::event::KB_INS);
+        input.handle_event(&mut ev);
+        let mut ev = Event::keyboard('X' as u16);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "Xbc");
+
+        // Back to insert mode
+        let mut ev = Event::keyboard(crate::core::event::KB_INS);
+        input.handle_event(&mut ev);
+        let mut ev = Event::keyboard('Y' as u16);
+        input.handle_event(&mut ev);
+        assert_eq!(*data.borrow(), "XYbc");
     }
 }
