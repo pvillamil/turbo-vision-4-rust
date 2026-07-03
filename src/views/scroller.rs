@@ -38,21 +38,34 @@ impl Scroller {
         scroller
     }
 
+    /// Maximum scroll offset: content size minus one page, never negative.
+    fn max_delta(&self) -> Point {
+        Point::new(
+            (self.limit.x - self.bounds.width()).max(0),
+            (self.limit.y - self.bounds.height()).max(0),
+        )
+    }
+
     /// Set the scroll offset
     pub fn scroll_to(&mut self, x: i16, y: i16) {
-        self.delta.x = x.max(0).min(self.limit.x);
-        self.delta.y = y.max(0).min(self.limit.y);
+        let max = self.max_delta();
+        self.delta.x = x.max(0).min(max.x);
+        self.delta.y = y.max(0).min(max.y);
         self.update_scrollbars();
     }
 
-    /// Set the content size limit
+    /// Set the content size limit (total content width/height in cells).
+    ///
+    /// Matches Borland TScroller::setLimit: the maximum scroll offset becomes
+    /// `limit - page`, so the view can't scroll a full page past the end.
     pub fn set_limit(&mut self, x: i16, y: i16) {
         self.limit.x = x.max(0);
         self.limit.y = y.max(0);
 
-        // Adjust delta if it exceeds new limit
-        self.delta.x = self.delta.x.min(self.limit.x);
-        self.delta.y = self.delta.y.min(self.limit.y);
+        // Adjust delta if it exceeds the new maximum offset
+        let max = self.max_delta();
+        self.delta.x = self.delta.x.min(max.x);
+        self.delta.y = self.delta.y.min(max.y);
 
         self.update_scrollbars();
     }
@@ -69,12 +82,18 @@ impl Scroller {
 
     /// Update scrollbar positions to match current delta
     fn update_scrollbars(&mut self) {
+        // Matches Borland TScroller::setLimit: the scrollbar's maximum is
+        // content size minus one page (you can't scroll a full page past the
+        // end) and paging moves size-1 lines so one line of overlap remains
+        let page_w = self.bounds.width() as i32;
+        let page_h = self.bounds.height() as i32;
+
         if let Some(ref mut h_bar) = self.h_scrollbar {
             h_bar.set_params(
                 self.delta.x as i32,
                 0,
-                self.limit.x as i32,
-                self.bounds.width() as i32,
+                (self.limit.x as i32 - page_w).max(0),
+                (page_w - 1).max(1),
                 1,
             );
         }
@@ -83,8 +102,8 @@ impl Scroller {
             v_bar.set_params(
                 self.delta.y as i32,
                 0,
-                self.limit.y as i32,
-                self.bounds.height() as i32,
+                (self.limit.y as i32 - page_h).max(0),
+                (page_h - 1).max(1),
                 1,
             );
         }
@@ -278,9 +297,10 @@ mod tests {
         scroller.scroll_to(10, 20);
         assert_eq!(scroller.get_delta(), Point::new(10, 20));
 
-        // Test clamping to limit
+        // Clamps to limit minus one page (80x25 view, 100x100 content):
+        // Borland TScroller can't scroll a full page past the end
         scroller.scroll_to(150, 150);
-        assert_eq!(scroller.get_delta(), Point::new(100, 100));
+        assert_eq!(scroller.get_delta(), Point::new(20, 75));
 
         // Test clamping to zero
         scroller.scroll_to(-10, -10);
@@ -293,14 +313,14 @@ mod tests {
         let mut scroller = scroller;
 
         // First set a large limit
-        scroller.set_limit(100, 100);
+        scroller.set_limit(200, 100);
         scroller.scroll_to(50, 50);
         assert_eq!(scroller.get_delta(), Point::new(50, 50));
 
-        // Reducing limit should clamp delta
-        scroller.set_limit(30, 30);
-        assert_eq!(scroller.get_delta(), Point::new(30, 30));
-        assert_eq!(scroller.get_limit(), Point::new(30, 30));
+        // Reducing the limit clamps delta to limit - page (80x25 view)
+        scroller.set_limit(100, 30);
+        assert_eq!(scroller.get_delta(), Point::new(20, 5));
+        assert_eq!(scroller.get_limit(), Point::new(100, 30));
     }
 
     #[test]

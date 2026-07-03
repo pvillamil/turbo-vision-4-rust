@@ -354,8 +354,10 @@ impl Application {
             // Check if application wants to quit (Alt+X, CM_QUIT)
             // This allows quit to work even when modal dialogs are open
             if !self.running {
+                // Matches Borland: TProgram::handleEvent endModal(cmQuit) —
+                // callers can distinguish app shutdown from a plain cancel
                 self.desktop.remove_child_by_id(view_id);
-                return CM_CANCEL;
+                return CM_QUIT;
             }
 
             // Check if the modal view wants to close

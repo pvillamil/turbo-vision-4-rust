@@ -345,6 +345,10 @@ impl Memo {
     }
 
     /// Insert tab (as spaces)
+    #[expect(
+        dead_code,
+        reason = "Tab now moves dialog focus (Borland TMemo); kept for a future editor-style Tab option"
+    )]
     fn insert_tab(&mut self) {
         if self.read_only {
             return;
@@ -715,10 +719,9 @@ impl View for Memo {
                         }
                         event.clear();
                     }
-                    KB_TAB => {
-                        self.insert_tab();
-                        event.clear();
-                    }
+                    // Tab is deliberately NOT consumed: Borland's TMemo
+                    // excludes kbTab so the key moves dialog focus instead
+                    // of inserting whitespace (TMemo.cc:63-67)
                     KB_CTRL_A => {
                         self.select_all();
                         event.clear();

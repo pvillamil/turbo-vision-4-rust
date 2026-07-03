@@ -319,8 +319,8 @@ impl Terminal {
     /// This controls how long the terminal waits after ESC to detect
     /// ESC+letter sequences.
     pub fn set_esc_timeout(&mut self, timeout_ms: u64) {
-        // This is only relevant for CrosstermBackend
-        // For other backends, this is a no-op
+        // Only the crossterm backend has an ESC-disambiguation timeout;
+        // other backends ignore the setting
         if let Some(ct_backend) = self.backend_as_crossterm_mut() {
             ct_backend.set_esc_timeout(timeout_ms);
         }
@@ -328,9 +328,7 @@ impl Terminal {
 
     /// Get a mutable reference to the backend as CrosstermBackend, if applicable.
     fn backend_as_crossterm_mut(&mut self) -> Option<&mut CrosstermBackend> {
-        // This is a workaround since we can't downcast trait objects easily
-        // In practice, we'd use Any trait for downcasting
-        None // For now, ESC timeout only works via Terminal::init()
+        self.backend.as_any_mut().downcast_mut::<CrosstermBackend>()
     }
 
     /// Force a full screen redraw on the next flush.

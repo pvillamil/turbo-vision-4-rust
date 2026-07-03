@@ -132,8 +132,9 @@ impl ScrollBar {
     /// `track / total` cells.
     fn get_thumb_size(&self) -> i32 {
         let track = self.get_size();
-        if self.total <= 0 {
-            return track.max(1);
+        // Nothing to scroll: no thumb at all (Borland draws a flat bar)
+        if self.total <= 0 || self.max_val <= self.min_val {
+            return 0;
         }
         let thumb = (track as i64 / self.total as i64) as i32;
         thumb.max(1).min(track)
@@ -639,5 +640,23 @@ impl ScrollBarBuilder {
 impl Default for ScrollBarBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_thumb_when_nothing_to_scroll() {
+        // Regression: a zero range drew a full-length thumb
+        let mut bar = ScrollBar::new_vertical(Rect::new(0, 0, 1, 12));
+        bar.set_params(0, 0, 0, 10, 1);
+        assert_eq!(bar.get_thumb_size(), 0);
+
+        // With a real range the thumb reappears
+        bar.set_params(0, 0, 50, 10, 1);
+        bar.set_total(100);
+        assert!(bar.get_thumb_size() >= 1);
     }
 }

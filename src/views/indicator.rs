@@ -27,6 +27,13 @@ impl Indicator {
         }
     }
 
+    /// Cursor position text: " line:col " (row first, 1-based).
+    ///
+    /// Matches Borland TIndicator::draw ("%d:%d", location.y+1, location.x+1).
+    fn format_text(&self) -> String {
+        format!(" {}:{} ", self.location.y + 1, self.location.x + 1)
+    }
+
     pub fn set_value(&mut self, location: Point, modified: bool) {
         self.location = location;
         self.modified = modified;
@@ -62,16 +69,15 @@ impl View for Indicator {
             buf.move_char(0, '*', color, 1);
         }
 
-        // Format: " WxH " (width x height) centered
-        let text = format!(" {}x{} ", self.location.x, self.location.y);
+        let text = self.format_text();
 
-        // Center the text around the 'x' character
-        if let Some(x_pos) = text.find('x') {
+        // Center the text around the ':' separator
+        if let Some(x_pos) = text.find(':') {
             let start_pos = (8_i32 - x_pos as i32).max(1) as usize;
             let start_pos = start_pos.min(width.saturating_sub(text.len()));
             buf.move_str(start_pos, &text, color);
         } else {
-            // Fallback: center normally if no 'x' found
+            // Fallback: center normally if no ':' found
             let start_pos = (width / 2).saturating_sub(text.len() / 2);
             buf.move_str(start_pos, &text, color);
         }
@@ -126,5 +132,18 @@ impl IndicatorBuilder {
 impl Default for IndicatorBuilder {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn indicator_shows_borland_line_colon_col() {
+        // Regression: used to display " col x row " ("13x4")
+        let mut ind = Indicator::new(Rect::new(0, 0, 12, 1));
+        ind.set_value(Point::new(12, 3), false); // cursor col 12, row 3 (0-based)
+        assert_eq!(ind.format_text(), " 4:13 ");
     }
 }

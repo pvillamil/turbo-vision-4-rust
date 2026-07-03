@@ -1044,6 +1044,10 @@ mod tests {
 
         struct NullBackend;
         impl crate::terminal::Backend for NullBackend {
+            fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+                self
+            }
+
             fn init(&mut self) -> std::io::Result<()> {
                 Ok(())
             }

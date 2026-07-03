@@ -86,6 +86,10 @@ impl Default for Capabilities {
 /// - Clipping regions
 /// - Event queuing
 pub trait Backend: Send {
+    /// Downcasting hook so `Terminal` can reach backend-specific settings
+    /// (e.g. the crossterm ESC-timeout) without widening the trait.
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any;
+
     /// Initialize the backend.
     ///
     /// This should set up the terminal for TUI operation:

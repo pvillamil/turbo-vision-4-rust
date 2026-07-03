@@ -113,12 +113,16 @@ pub fn clear_command_set_changed() {
 /// Initialize the global command set with specific disabled commands
 /// Matches Borland: initCommands() (tview.cc:58-68)
 pub fn init_command_set() {
-    use crate::core::command::CM_CLOSE;
+    use crate::core::command::{CM_CLOSE, CM_NEXT, CM_PREV, CM_RESIZE, CM_ZOOM};
 
     GLOBAL_COMMAND_SET.with(|cs| {
         let mut set = cs.borrow_mut();
         *set = CommandSet::with_all_enabled();
-        set.disable_command(CM_CLOSE);
+        // Matches Borland initCommands (tview.cc): window commands start
+        // disabled and are enabled when a window can accept them
+        for cmd in [CM_CLOSE, CM_ZOOM, CM_RESIZE, CM_NEXT, CM_PREV] {
+            set.disable_command(cmd);
+        }
     });
     COMMAND_SET_CHANGED.with(|changed| *changed.borrow_mut() = false);
 }
@@ -203,9 +207,12 @@ impl CommandSet {
         let start = cmd_start as usize;
         let end = cmd_end as usize;
 
-        if end >= MAX_COMMANDS || end <= start {
+        // Inclusive range like Borland's loops: a single-command range
+        // (start == end) is valid, and end is clamped rather than rejected
+        if start >= MAX_COMMANDS || end < start {
             return;
         }
+        let end = end.min(MAX_COMMANDS - 1);
 
         let word_start = start / 32;
         let word_end = end / 32;
@@ -241,9 +248,12 @@ impl CommandSet {
         let start = cmd_start as usize;
         let end = cmd_end as usize;
 
-        if end >= MAX_COMMANDS || end <= start {
+        // Inclusive range like Borland's loops: a single-command range
+        // (start == end) is valid, and end is clamped rather than rejected
+        if start >= MAX_COMMANDS || end < start {
             return;
         }
+        let end = end.min(MAX_COMMANDS - 1);
 
         let word_start = start / 32;
         let word_end = end / 32;
@@ -385,5 +395,34 @@ mod tests {
         assert!(!cs.has(1000));
         assert!(!cs.has(60000));
         assert!(!cs.has(65535)); // Maximum u16 value
+    }
+
+    #[test]
+    fn test_single_command_range_and_clamped_end() {
+        // Regression: enable_range(n, n) used to be a silent no-op
+        let mut set = CommandSet::new();
+        set.enable_range(42, 42);
+        assert!(set.has(42));
+        set.disable_range(42, 42);
+        assert!(!set.has(42));
+
+        // A range ending at the last command is clamped, not rejected
+        let mut set = CommandSet::new();
+        set.enable_range(65530, 65535);
+        assert!(set.has(65530));
+        assert!(set.has(65535));
+    }
+
+    #[test]
+    fn test_init_command_set_disables_window_commands() {
+        use crate::core::command::{CM_CLOSE, CM_NEXT, CM_PREV, CM_RESIZE, CM_ZOOM};
+        init_command_set();
+        for cmd in [CM_CLOSE, CM_ZOOM, CM_RESIZE, CM_NEXT, CM_PREV] {
+            assert!(!command_enabled(cmd), "cmd {cmd} should start disabled");
+        }
+        assert!(command_enabled(crate::core::command::CM_QUIT));
+        // Restore a fully-enabled set for other tests sharing the thread-local
+        init_command_set();
+        enable_command(CM_CLOSE);
     }
 }

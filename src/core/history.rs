@@ -168,14 +168,18 @@ pub struct HistoryManager;
 impl HistoryManager {
     /// Add an item to a history list
     pub fn add(history_id: u16, item: String) {
-        let mut manager = history_manager().lock().unwrap();
+        let mut manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let list = manager.entry(history_id).or_insert_with(HistoryList::new);
         list.add(item);
     }
 
     /// Get a copy of a history list
     pub fn get_list(history_id: u16) -> Vec<String> {
-        let manager = history_manager().lock().unwrap();
+        let manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         manager
             .get(&history_id)
             .map(|list| list.items().to_vec())
@@ -184,7 +188,9 @@ impl HistoryManager {
 
     /// Check if a history list exists and has items
     pub fn has_history(history_id: u16) -> bool {
-        let manager = history_manager().lock().unwrap();
+        let manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         manager
             .get(&history_id)
             .map(|list| !list.is_empty())
@@ -193,13 +199,17 @@ impl HistoryManager {
 
     /// Get the number of items in a history list
     pub fn count(history_id: u16) -> usize {
-        let manager = history_manager().lock().unwrap();
+        let manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         manager.get(&history_id).map(|list| list.len()).unwrap_or(0)
     }
 
     /// Clear a specific history list
     pub fn clear(history_id: u16) {
-        let mut manager = history_manager().lock().unwrap();
+        let mut manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if let Some(list) = manager.get_mut(&history_id) {
             list.clear();
         }
@@ -207,13 +217,17 @@ impl HistoryManager {
 
     /// Clear all history lists
     pub fn clear_all() {
-        let mut manager = history_manager().lock().unwrap();
+        let mut manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         manager.clear();
     }
 
     /// Set custom max items for a history list
     pub fn set_max_items(history_id: u16, max_items: usize) {
-        let mut manager = history_manager().lock().unwrap();
+        let mut manager = history_manager()
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let list = manager
             .entry(history_id)
             .or_insert_with(|| HistoryList::with_max_items(max_items));

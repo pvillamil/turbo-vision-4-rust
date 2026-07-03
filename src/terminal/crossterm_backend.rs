@@ -151,6 +151,10 @@ impl CrosstermBackend {
 }
 
 impl Backend for CrosstermBackend {
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
+    }
+
     fn init(&mut self) -> io::Result<()> {
         terminal::enable_raw_mode()?;
         let mut stdout = stdout();

@@ -407,28 +407,42 @@ impl Group {
         }
     }
 
+    /// True if the child at `index` can take focus.
+    ///
+    /// Matches Borland TGroup::findNext: the view must be selectable and not
+    /// disabled. (SF_VISIBLE is not checked because this port never sets it;
+    /// hidden views are simply not added to the group.)
+    fn child_focusable(&self, index: usize) -> bool {
+        use crate::core::state::SF_DISABLED;
+        let child = &self.children[index];
+        child.can_focus() && (child.state() & SF_DISABLED) == 0
+    }
+
     pub fn select_next(&mut self) {
         if self.children.is_empty() {
             return;
         }
 
-        // Clear focus from current child
+        // Find the next focusable child WITHOUT dropping current focus:
+        // if no other child qualifies, focus stays where it is (Borland's
+        // focusNext is a no-op in that case)
+        let start_index = self.focused;
+        let mut candidate = self.focused;
+        loop {
+            candidate = (candidate + 1) % self.children.len();
+            if candidate == start_index {
+                return; // wrapped without finding another focusable child
+            }
+            if self.child_focusable(candidate) {
+                break;
+            }
+        }
+
         if self.focused < self.children.len() {
             self.children[self.focused].set_focus(false);
         }
-
-        let start_index = self.focused;
-        loop {
-            self.focused = (self.focused + 1) % self.children.len();
-            if self.children[self.focused].can_focus() {
-                self.children[self.focused].set_focus(true);
-                break;
-            }
-            // Prevent infinite loop if no focusable children
-            if self.focused == start_index {
-                break;
-            }
-        }
+        self.focused = candidate;
+        self.children[self.focused].set_focus(true);
     }
 
     pub fn select_previous(&mut self) {
@@ -436,29 +450,29 @@ impl Group {
             return;
         }
 
-        // Clear focus from current child
+        // Mirror image of select_next: scan backwards, keep focus if no
+        // other focusable child exists
+        let start_index = self.focused;
+        let mut candidate = self.focused;
+        loop {
+            candidate = if candidate == 0 {
+                self.children.len() - 1
+            } else {
+                candidate - 1
+            };
+            if candidate == start_index {
+                return;
+            }
+            if self.child_focusable(candidate) {
+                break;
+            }
+        }
+
         if self.focused < self.children.len() {
             self.children[self.focused].set_focus(false);
         }
-
-        let start_index = self.focused;
-        loop {
-            // Move to previous, wrapping around
-            if self.focused == 0 {
-                self.focused = self.children.len() - 1;
-            } else {
-                self.focused -= 1;
-            }
-
-            if self.children[self.focused].can_focus() {
-                self.children[self.focused].set_focus(true);
-                break;
-            }
-            // Prevent infinite loop if no focusable children
-            if self.focused == start_index {
-                break;
-            }
-        }
+        self.focused = candidate;
+        self.children[self.focused].set_focus(true);
     }
 }
 
